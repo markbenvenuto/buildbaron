@@ -4,7 +4,7 @@
 Install
 
 ```
-pyp install -r requirements.txt
+pip2 install -r www/requirements.txt
 ```
 
 It is a two step process:
@@ -12,13 +12,13 @@ It is a two step process:
 1. Do the analysis
 
 ```
-python evg_analyzer.py
+python2 evg_analyzer.py
 ```
 
 2. View the analysis
 
 ```
-python www\runserver.py
+python2 www\runserver.py
 ```
 The webserver is running at <http://localhost:5555/>
 
@@ -27,6 +27,6 @@ The webserver is running at <http://localhost:5555/>
 *Scripts to deduplicate stacks from hang_analyzer.py*
 
 ```
-python win_deadlock_analyzer.py
-python gdb_deadlock_analyzer.py
+python2 win_deadlock_analyzer.py
+python2 gdb_deadlock_analyzer.py
 ```
