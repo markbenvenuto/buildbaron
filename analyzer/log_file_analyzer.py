@@ -3,30 +3,19 @@
 A JS Test/Unit test log file analyzer
 """
 import argparse
-import io
 import json
 import os
-import pprint
 import re
 import sys
 
 if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.dirname(os.path.abspath(os.path.realpath(__file__))))
-    print(sys.path)
     import faultinfo
 else:
     from . import faultinfo
 
-# LogFile -> Log File Splitter -> FaultFinders -> Faultinfo
-# LogFile - text stream
-# LogFileSplitter - split log file into output from (test, mongod, mongos, etc) streams
-
 ROOT = "Root"
-MONGO_ROOT = "MongoRoot"
-SHELL = "Shell"
-
-RE_SERVER = re.compile('^(([cds]|sh)[0-9]{5})')
-RE_SERVER_PREFIX = re.compile('^(([cds]|sh)[0-9]{5})\|')
+TEST = "Test"
 
 
 class LineInfo:
@@ -53,352 +42,251 @@ class LineInfo:
 
 
 class LogFileSplitter:
-    """Splits various streams in a log file in separate files
+    """
+    The log file for an individual test logically contains many different logs all intermingled into
+    one. There are usually at least two different categories of logs: logs from the test itself (
+    which might include things like js assertion failures), and logs from the processes running
+    (e.g. the processes started by a ShardingTest, or the fixture started by resmoke).
+
+    This class will split each set of logs into separate 'streams', so regexes attempting to look
+    for common log patterns can be applied one logical stream of logs without risking an unrelated
+    log line from another process appearing between lines of another stream.
     """
 
+    GLOBAL_STREAM = 0
+    PROCESS_STREAM = 1
+    TEST_STREAM = 2
+
     def __init__(self, lstr):
-        # Sinks
-        # - no prefix
-        # prefixed lines
-        # remove dates
-        # --d20010, s...., c....
-        #
-        re_files = re.compile('^\[.*?\] ')
+        re_test_prefix = re.compile(
+            '^\[(js_test|cpp_unit_test|db_test|cpp_integration_test|CheckReplDBHash):(.*?)\] ')
+        re_fixture_prefix = re.compile('^\[(.*?:job[0-9]+(?::[^\]]*?)?)\] ')
         re_time = re.compile(
-            '^(-?(?:[1-9][0-9]*)?[0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):([0-5][0-9]):([0-5][0-9])(\.[0-9]+)?(Z|[+-][0-9]{4})? '
+            '^(-?(?:[1-9][0-9]*)?[0-9]{4})-'
+            '(1[0-2]|0[1-9])-'
+            '(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):'
+            '([0-5][0-9]):'
+            '([0-5][0-9])'
+            '(\.[0-9]+)?'
+            '(Z|[+-][0-9]{4})? '
         )
         re_server = re.compile('^(([cds]|sh)[0-9]{5})\|')
 
         lines = lstr.splitlines()
-        self.splits = {ROOT: [], MONGO_ROOT: [], SHELL: []}
+        self.streams = {}
         line_number = 1
         for line in lines:
-            files_match = re_files.match(line)
+            test_prefix_match = re_test_prefix.match(line)
+            entire_line = LineInfo(line_number, line)
 
-            if files_match:
-
-                remaining = line[files_match.end(0):]
-                # print remaining
+            if test_prefix_match:
+                test_name = test_prefix_match.groups()[1]
+                remaining = line[test_prefix_match.end():]
                 time_match = re_time.match(remaining)
-                if time_match:
-
-                    # print remaining
-                    remaining = remaining[time_match.end(0):]
-                    server_match = re_server.match(remaining)
-                    if server_match:
-                        process_name = server_match.groups()[0]
-                        if process_name not in self.splits:
-                            self.splits[process_name] = []
-                        self.splits[process_name].append(LineInfo(line_number, remaining))
-                    else:
-                        self.splits[SHELL].append(LineInfo(line_number, remaining))
+                assert(time_match)
+                remaining = remaining[time_match.end(0):]
+                server_match = re_server.match(remaining)
+                if server_match:
+                    # These are the logs of an individual process, e.g. mongod or mongos.
+                    process_name = server_match.groups()[0]
+                    self.add_line_to_stream(process_name,
+                                            LogFileSplitter.PROCESS_STREAM,
+                                            LineInfo(line_number, remaining))
                 else:
-                    self.splits[MONGO_ROOT].append(LineInfo(line_number, remaining))
+                    self.add_line_to_stream(test_name,
+                                            LogFileSplitter.TEST_STREAM,
+                                            LineInfo(line_number, remaining))
             else:
-                self.splits[ROOT].append(LineInfo(line_number, line))
+                fixture_match = re_fixture_prefix.match(line)
+                if fixture_match:
+                    remaining = line[fixture_match.end():]
+                    self.add_line_to_stream(fixture_match.groups()[0],
+                                            LogFileSplitter.PROCESS_STREAM,
+                                            LineInfo(line_number, remaining))
+                else:
+                    self.add_line_to_stream(ROOT, LogFileSplitter.GLOBAL_STREAM, entire_line)
             line_number += 1
 
-    def dump(self):
-        for key in iter(self.splits):
-            print(str(key) + ":" + str(len(self.splits[key])))
+    def add_line_to_stream(self, stream_id, stream_type, line_info):
+        if stream_id not in self.streams:
+            self.streams[stream_id] = {"stream_type": stream_type, "id": stream_id, "lines": []}
+        self.streams[stream_id]["lines"].append(line_info)
 
-    def getsplits(self):
-        return self.splits
+    def get_streams(self):
+        return self.streams
 
 
 class LogFileAnalyzer:
-    def __init__(self, splits):
-        self.splits = splits
+    """
+    TODO(CWS)
+    """
+
+    # TODO(CWS): document
+    PROCESS_FAULTS = [
+        {
+            "fault_type": "C runtime error",
+            "regex_string": r"\*\*\* C runtime error.*$",
+        },
+        {
+            "fault_type": "fatal assertion",
+            "begin_regex_string": r"Fatal assertion.*?$",
+            "multi_line": True,
+            "end_regex_string": r"\*\*\*aborting after fassert failure",
+        },
+        {
+            "fault_type": "invariant failure",
+            "begin_regex_string": r"Invariant failure.*?$",
+            "multi_line": True,
+            "end_regex_string": r"\*\*\*aborting after invariant\(\) failure",
+        },
+        {
+            "fault_type": "Segmentation fault",
+            "begin_regex_string": r"Invariant failure.*?$",
+            "multi_line": True,
+            "end_regex_string": r"END BACKTRACE",
+        },
+        {
+            "fault_type": "mongos startup failure",
+            "regex_string": r"Error: Failed to start mongos.*?failed.*?js",
+        },
+        {
+            "fault_type": "memory leak(s)",
+            "begin_regex_string": r"LeakSanitizer: detected memory leaks.*?$",
+            "multi_line": True,
+            "end_regex_string": r"SUMMARY: AddressSanitizer.*?$",
+        },
+        {
+            "fault_type": "tcmalloc memory corruption",
+            "begin_regex_string": r"Found a corrupted memory buffer in MallocBlock.*?$",
+            "multi_line": True,
+            "end_regex_string": r"END BACKTRACE",
+        },
+        {
+            "fault_type": "teardown failure",
+            "regex_string": r"mongo.*?teardown.*?wasn't\.$",
+        },
+    ]
+
+    # TODO(CWS): document
+    TEST_FAULTS = [
+        {
+            "fault_type": "parallel test failure",
+            "regex_string": r"Parallel Test FAILED: .*$",
+        },
+        {
+            "fault_type": "js error",
+            "begin_regex_string": r"(^Error: |assert .*failed :)",
+            "multi_line": True,
+            "end_regex_string": r".*?\.js:[0-9]+(:[0-9]+)?$",
+        },
+        {
+            "fault_type": "js backtrace",
+            "begin_regex_string": r"@[a-zA-Z0-9_/\\<> ]+(\.js|eval):[0-9]+(:[0-9]+)?$",
+            "multi_line": True,
+            "end_regex_string": r"[^0-9]$",
+        },
+        {
+            "fault_type": "unittest failure",
+            "regex_string": r"FAIL: ",
+        },
+        {
+            "fault_type": "bad exit code",
+            "regex_string": r"StopError:.*?exited with error code -?(\d+)$",
+        },
+        {
+            "fault_type": "fatal assertion",
+            "begin_regex_string": r"Fatal assertion.*?$",
+            "multi_line": True,
+            "end_regex_string": r"\*\*\*aborting after fassert failure",
+        },
+        {
+            "fault_type": "invariant failure",
+            "begin_regex_string": r"Invariant failure.*?$",
+            "multi_line": True,
+            "end_regex_string": r"END BACKTRACE",
+        },
+        {
+            "fault_type": "Segmentation fault",
+            "begin_regex_string": r"Invariant failure.*?$",
+            "multi_line": True,
+            "end_regex_string": r"END BACKTRACE",
+        },
+        {
+            "fault_type": "dbhash mismatch",
+            "begin_regex_string": "checkReplicatedDataHashes.*different hash for the collection",
+            "multi_line": True,
+            "end_regex_string": "Dumping collection",
+        },
+    ]
+
+    def __init__(self, streams):
+        self.streams = streams
         self.joins = {}
         self.faults = []
         self.contexts = []
 
-        for key in self.splits:
-            start = 0
-            new_str = ""
+    def add_fault(self, key, line_number, category, context):
+        self.faults.append(faultinfo.FaultInfo(key, category, context, line_number))
 
-            for line in self.splits[key]:
-                line.set_start(start)
-                start = start + len(str(line)) + 1
+    def extract_multiline_regex(self, lines, start_line, end_regex):
+        """
+        TODO(CWS)
+        """
+        line_number = start_line
+        while (line_number < len(lines) and
+               end_regex.search(lines[line_number].get_line()) is None):
+            line_number += 1
+        return line_number, lines[start_line:line_number]
 
-            self.joins[key] = '\n'.join([str(a) for a in self.splits[key]])
+    def extract_faults_from_stream(self, stream, fault_specs):
+        """
+        TODO(CWS)
+        """
+        stream_line_num = 0
+        while (stream_line_num < len(stream["lines"])):
+            for fault in fault_specs:
+                line_info = stream["lines"][stream_line_num]
+                if fault.get("multi_line", False):
+                    # This is a multi-line regex. We check this line for a match with the start
+                    # regex, then keep looking until we find a match for the end regex.
+                    fault_start_regex = re.compile(fault["begin_regex_string"])
+                    fault_match = fault_start_regex.search(line_info.get_line())
+                    if fault_match is None:
+                        continue
 
-    def check_all(self, re_str):
-        """Check all streams"""
-        re_c = re.compile(re_str, flags=re.DOTALL)
-        matches = []
-        for key in iter(self.splits):
-            match = re_c.search(self.joins[key])
-            if match:
-                matches.append({"key": key, "match": match})
+                    new_line_number, fault_context = self.extract_multiline_regex(
+                        stream["lines"],
+                        stream_line_num,
+                        re.compile(fault["end_regex_string"]))
 
-        return matches if len(matches) > 0 else None
-
-    def add_fault(self, key, start, category, context):
-        line_info = self.splits[key][0]
-        for line in self.splits[key]:
-            if start > line.get_start():
-                line_info = line
-            else:
-                break
-        # TODO: add optional # of lines of context to report
-
-        self.faults.append(faultinfo.FaultInfo(key, category, context, line_info.get_line_number()))
-
-    def add_context(self, key, start, category, context):
-        line_info = self.splits[key][0]
-        for line in self.splits[key]:
-            if start > line.get_start():
-                line_info = line
-            else:
-                break
-
-        self.contexts.append(
-            faultinfo.FaultInfo(key, category, context, line_info.get_line_number()))
+                    self.add_fault(stream["id"],
+                                   fault_context[0].get_line_number(),
+                                   fault["fault_type"],
+                                   "\n".join([l_info.get_line() for l_info in fault_context]))
+                    stream_line_num = new_line_number
+                    if stream_line_num >= len(stream["lines"]):
+                        break
+                else:
+                    # Easy case - a single line fault.
+                    fault_regex = re.compile(fault["regex_string"])
+                    fault_match = fault_regex.search(line_info.get_line())
+                    if fault_match is not None:
+                        self.add_fault(stream["id"],
+                                       line_info.get_line_number(),
+                                       fault["fault_type"],
+                                       line_info.get_line())
+            stream_line_num += 1
 
     def analyze(self):
-        # Check for SIGKILL, SIGABORT
-        # StopError: MongoDB process on port 20012 exited with error code -6 :
-
-        #if self.check_bad_exit():
-        # Check for MongoDB Errors like stack traces
-        #    print "Bad Exit"
-
-        # Check for "StopError"
-        # Test had unhappy exit
-        if self.check_stoperror():
-            #print "Find fatal assert"
-            #TODO add more info
-            self.gather_context()
-            return
-
-        # Check for memory corruption
-        if self.check_tcmalloc_corruption():
-            return
-
-        # Check for failed tests in parallel suites
-        # Check for js asserts
-        if self.check_parallel_failed():
-            self.gather_js_asserts()
-            self.gather_context()
-            return
-
-        # Check for js asserts
-        if self.check_js_asserts():
-            self.gather_context()
-            return
-
-        # did the shell see:  Error: Error: error doing query
-
-        if self.check_mongo_query_failure():
-            self.gather_context()
-            return
-
-        # Check to see if a program failed to start
-        if self.check_failed_start():
-            self.gather_context()
-            return
-
-        # Check to see if repl wait failed
-        if self.check_failed_repl_wait():
-            self.gather_context()
-            return
-
-        # Check if teardown failed
-        if self.check_teardown():
-            self.gather_context()
-            return
-
-        # Check unit tests
-        if self.check_unit_tests():
-            self.gather_context()
-            return
-
-        # Unit Tests if they die in the middle just have asserts
-        if self.check_just_fatal_exit():
-            self.gather_context()
-            return
-
-        # Unit Tests if they finish with leaks
-        if self.check_just_leaks():
-            self.gather_context()
-            return
-
-        # If we cannot figure out why it stoppped, maybe it didn't
-        # but report on interesting information.
-        self.gather_context()
-
-    def gather_context(self):
-        self.gather_fasserts()
-        self.gather_invariants()
-        self.gather_terminates()
-        self.gather_go_crashes()
-        self.gather_leaks()
-        self.gather_crashes()
-        self.gather_tcmalloc_corruption()
-
-    def gather_context_re(self, quick_check, detail_checks):
-        """Iterate through each slice of the log, see if it contains a particular message, and if so, use a regex to get more information"""
-        matches = self.check_all(quick_check)
-
-        compiled = [re.compile(check[1], flags=re.DOTALL) for check in detail_checks]
-
-        if matches:
-            for match in matches:
-                log_str = self.joins[match["key"]]
-
-                for idx in range(len(detail_checks)):
-                    check = detail_checks[idx]
-                    check_re = compiled[idx]
-                    check_match = check_re.search(log_str)
-                    if check_match:
-                        self.add_context(match["key"],
-                                         check_match.start(), check[0], check_match.group(0))
-
-    def gather_fasserts(self):
-        # Tests can fail for reasons other then fasserts
-        # like access violation
-        # TODO: check shell
-        self.gather_context_re("aborting after fassert",
-                               [["fassert", "Fatal [A|a]ssertion.*aborting.*?failure"],
-                                ["fassert", "aborting.*?END BACKTRACE"]])
-
-    def gather_invariants(self):
-        # Tests can fail for reasons other then fasserts
-        # like access violation
-        self.gather_context_re("Invariant failure",
-                               [["invariant", "Invariant failure.*aborting.*?END BACKTRACE"],
-                                ["invariant", "Invariant failure.*aborting.*?writing minidump"]])
-
-    def gather_terminates(self):
-        # Tests can fail for reasons other then fasserts
-        # like access violation
-        self.gather_context_re("terminate\(\) called",
-                               [["terminate", "terminate\(\) called.*?END BACKTRACE"],
-                                ["terminate", "terminate\(\) called.*?writing minidump"]])
-
-    def gather_go_crashes(self):
-        # Tests can fail for reasons other then fasserts
-        # like access violation
-        self.gather_context_re("unexpected fault address",
-                               [["go binary crash", "unexpected fault address.*goroutine"]])
-
-    def gather_js_asserts(self):
-        self.gather_context_re("assert(:|\.soon).*?failed.*?js",
-                               [["js assert", "assert(:|\.soon).*?failed.*?js"]])
-
-    def gather_leaks(self):
-        # JS tests do not directly fail due to the leak sanitizier
-        self.gather_context_re(
-            "LeakSanitizer",
-            [["memory leaks", "LeakSanitizer: detected memory leaks.*?SUMMARY.*?\."]])
-
-    def gather_crashes(self):
-        self.gather_context_re("Segmentation Fault",
-                               [["segmentation fault", "Segmentation Fault.*?END BACKTRACE"]])
-
-    def gather_tcmalloc_corruption(self):
-        self.gather_context_re("Found a corrupted memory buffer", [[
-            "tcmalloc memory corruption",
-            "Found a corrupted memory buffer in MallocBlock.*?END BACKTRACE"
-        ]])
-
-    def base_joins(self):
-        """ Loop through all the streams for reasons why tests fail"""
-        for stream in [ROOT, MONGO_ROOT, SHELL]:
-            yield stream, self.joins[stream]
-
-    def check_fault_re(self, checks, single_line=False):
-        if single_line:
-            re_flags = 0
-        else:
-            re_flags = re.DOTALL
-
-        compiled = [re.compile(check[1], flags=re_flags) for check in checks]
-
-        for stream_name, stream in self.base_joins():
-            for idx in range(len(checks)):
-                check = checks[idx]
-                check_re = compiled[idx]
-                check_match = check_re.search(stream)
-                if check_match:
-                    self.add_fault(stream_name, check_match.start(), check[0], check_match.group(0))
-                    return True
-
-        return False
-
-    def check_just_fatal_exit(self):
-        # Tests can fail for reasons other then fasserts
-        # like access violation
-        #*** C runtime error: C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\INCLUDE\xtree(326) : Assertion failed: map/set iterators incompatible, terminating
-        return self.check_fault_re([["c_runtime_error", "\*\*\* C runtime error.*"],
-                                    ["fassert", "aborting after fassert"]], True)
-
-    def check_mongo_query_failure(self):
-        return self.check_fault_re([[
-            "mongo query failure",
-            "Error: (explain|error doing query|map reduce failed|error:).*failed.*?js"
-        ]])
-
-    def check_failed_start(self):
-        return self.check_fault_re(
-            [["failed to start mongos", "Error: Failed to start mongos.*failed.*?js"]])
-
-    def check_failed_repl_wait(self):
-        return self.check_fault_re([[
-            "failed to wait for replication",
-            "Error: waiting for replication timed out.*failed.*?js"
-        ]])
-
-    def check_parallel_failed(self):
-        return self.check_fault_re([["parallel test failed", "Parallel Test FAILED: .*"]], True)
-
-    def check_js_asserts(self):
-        return self.check_fault_re([["js assert", "assert(:|\.soon).*?failed.*?js"]])
-
-    def check_teardown(self):
-        return self.check_fault_re([["teardown failed", "mongo.*?teardown.*?wasn't."]], True)
-
-    def check_just_leaks(self):
-        # Unit tests directly fail due to the leak sanitizier
-        return self.check_fault_re(
-            [["memory leaks", "LeakSanitizer: detected memory leaks.*?SUMMARY.*?\."]])
-
-    def check_tcmalloc_corruption(self):
-        return self.check_fault_re([[
-            "tcmalloc memory corruption",
-            "Found a corrupted memory buffer in MallocBlock.*?END BACKTRACE"
-        ]])
-
-    def check_unit_tests(self):
-        shell = self.joins[SHELL]
-
-        assert_match = re.search("DONE running tests.*?FAILURE.*?failed", shell, flags=re.DOTALL)
-        if assert_match:
-            self.add_fault(SHELL,
-                           assert_match.start(), "C++ Unit Test Failure", assert_match.group(0))
-            return True
-        return False
-
-    def check_stoperror(self):
-        for stream_name, stream in self.base_joins():
-            assert_match = re.search("StopError:.*failed.*?js", stream, flags=re.DOTALL)
-            if assert_match:
-                text = assert_match.group(0)
-
-                if "error code -1073741819" in text:
-                    self.add_fault(stream_name,
-                                   assert_match.start(), "Windows_Access_Violation", text)
-                elif "error code -6" in text:
-                    self.add_fault(stream_name, assert_match.start(), "Process_Abort", text)
-                else:
-                    self.add_fault(stream_name, assert_match.start(), "StopError", text)
-                return True
-        return False
-
-    def check_bad_exit(self):
-        # Check Shell Errors
-        return self.check_fault_re([["bad exit code", "exited with error code -(\d+)"]])
+        """
+        TODO(CWS)
+        """
+        for stream_id in self.streams:
+            stream = self.streams[stream_id]
+            if stream["stream_type"] == LogFileSplitter.PROCESS_STREAM:
+                self.extract_faults_from_stream(stream, LogFileAnalyzer.PROCESS_FAULTS)
+            elif stream["stream_type"] == LogFileSplitter.TEST_STREAM:
+                self.extract_faults_from_stream(stream, LogFileAnalyzer.TEST_FAULTS)
 
     def get_faults(self):
         return self.faults
@@ -424,9 +312,7 @@ def main():
 
         LFS = LogFileSplitter(log_file_str)
 
-        s = LFS.getsplits()
-
-        analyzer = LogFileAnalyzer(s)
+        analyzer = LogFileAnalyzer(LFS.get_streams())
 
         analyzer.analyze()
 
@@ -434,17 +320,12 @@ def main():
 
         if len(faults) == 0:
             print("===========================")
-            print("Analysis failed for test: " + file)
+            print("No faults found failed for test: " + file)
             print("===========================")
             return
 
         for f in analyzer.get_faults():
             print(f)
-
-        print(analyzer.to_json())
-
-        f = json.loads(analyzer.to_json(), cls=faultinfo.CustomDecoder)
-
 
 if __name__ == '__main__':
     main()

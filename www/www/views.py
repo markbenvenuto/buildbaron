@@ -100,8 +100,6 @@ def failure():
         contents = sjh.read().decode('utf-8')
         failed_bfs_root = json.loads(contents)
 
-    query = failed_bfs_root['query']
-    date = failed_bfs_root['date']
     failed_bfs = failed_bfs_root['bfs']
 
     issue = request.args.get('issue')
@@ -113,9 +111,23 @@ def failure():
         if ft["test"]["issue"] == issue and test_name == ft["test"]["name"]:
             failed_bf = ft
 
+    assert (failed_bf is not None), "could not find matching test. Looking for issue '{0}' within {1}".format(ft["test"]["name"], [bf["test"]["name"] for bf in failed_bfs])
+
     # Predicates
+    def remove_special_characters(string):
+        new_string = ""
+        for c in string:
+            if c not in ["]", "}", "[", "{", "(", ")", "\\", '"', "'"]:
+                new_string += c
+        return new_string
+
+    print(failed_bf)
+    jira_text_terms = [os.path.basename(test_name), failed_bf['test']['suite']]
+    if (failed_bf.get("summary") and type(failed_bf["summary"]) != str and failed_bf["summary"]["faults"]):
+        jira_text_terms.extend([remove_special_characters(fault["context"].splitlines()[0]) for fault in
+                                failed_bf["summary"]["faults"]])
     jc = get_jira_client()
-    jira_query = jc.query_duplicates_text([os.path.basename(test_name), failed_bf['test']['suite']])
+    jira_query = jc.query_duplicates_text(jira_text_terms)
     issues = jc.search_issues(jira_query)
 
     issues.sort(key=issue_sort)

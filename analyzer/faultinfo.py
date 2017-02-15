@@ -21,7 +21,9 @@ class FaultInfo:
         self.line_number = line_number
 
     def __str__(self):
-        return "FaultInfo -- " + self.source + " - " + self.category
+        return "FaultInfo -- {0} - {1}\n{2}".format(self.source,
+                                                    self.category,
+                                                    self.context)
 
 
 class CustomEncoder(json.JSONEncoder):

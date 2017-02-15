@@ -38,6 +38,9 @@ class TimeOutAnalyzer(object):
         for idx in range(len(self.lines)):
             line = self.lines[idx]
 
+            if "Task timed out" in line:
+                self.add_fault('task time out', idx, 3, 1)
+
             # JS Test Name
             m = re.search("Running (.*\.js)", line)
             if m:
@@ -55,7 +58,7 @@ class TimeOutAnalyzer(object):
             # JS Test Filter
             m = re.search("Writing output of JSTest (.*) to (http.*/)\.", line)
             if m:
-                test_name = os.path.basename(m.group(1))
+                test_name = os.path.basename(m.group(1).replace("\\", "/"))
                 testLogs[test_name] = m.group(2)
 
             # Unit Test Filter
@@ -76,15 +79,11 @@ class TimeOutAnalyzer(object):
             if m:
                 completedTests.append(m.group(1))
 
-            if "Command failed: Shell command interrupted" in line:
-                self.add_fault('task interrupted', idx, 10, 5)
-
         incompleteTestsContext = {}
 
         for t in list(set(startedTests) - set(completedTests)):
             incompleteTestsContext[t] = testLogs.get(t, '(log url not available)')
 
-        context = ""
         if len(incompleteTestsContext) > 0:
             for test, incomplete in incompleteTestsContext.items():
                 self.incomplete_tests.append({'name': test, 'log_file': incomplete})

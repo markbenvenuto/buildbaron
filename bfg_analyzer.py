@@ -13,10 +13,7 @@ import os
 import pprint
 import re
 import stat
-import string
 import sys
-
-import requests
 
 # Global override
 UPDATE_JIRA = False
@@ -28,9 +25,11 @@ if __name__ == "__main__" and __package__ is None:
 import buildbaron.analyzer.analyzer_config
 import buildbaron.analyzer.evergreen
 import buildbaron.analyzer.evg_log_file_analyzer
+import buildbaron.analyzer.extract_backtrace
 import buildbaron.analyzer.jira_client
 import buildbaron.analyzer.log_file_analyzer
 import buildbaron.analyzer.logkeeper
+import buildbaron.analyzer.parallel_failure_analyzer
 import buildbaron.analyzer.timeout_file_analyzer
 
 
@@ -51,12 +50,10 @@ def ParseJiraTicket(issue, summary, description):
     else:
         raise ValueError("Unknown summary " + str(summary))
 
-    suite = "unknown"
-    build_variant = "unknown"
-    summary_match = re.match(".*?: (.*) on (.*) \(", summary)
+    suite, build_variant, project, githash = ("unknown", "unknown", "unknown", "unknown")
+    summary_match = re.match(".*?: (.*) on (.*) \[(.*) @ ([a-zA-Z0-9]+)\]", summary)
     if summary_match:
-        suite = summary_match.group(1)
-        build_variant = summary_match.group(2)
+        suite, build_variant, project, githash = summary_match.groups()
 
     # Parse Body of description
     lines = description.split("\n")
@@ -65,29 +62,44 @@ def ParseJiraTicket(issue, summary, description):
         if line.startswith('h2.'):
             url_match = re.search("\|(.*)\]", line)
             task_url = url_match.group(1)
-        elif line.startswith('Project'):
-            p_match = re.search("\[(.*)\|", line)
-            project = p_match.group(1)
         elif "[Logs|" in line:
             log_line_match = re.match("\*(.*)\* - \[Logs\|(.*?)\]", line)
-            test_name = log_line_match.group(1)
-            log_file = log_line_match.group(2)
-            tests.append({'name': test_name, 'log_file': log_file})
+            if log_line_match:
+                test_name = log_line_match.group(1)
+                log_file = log_line_match.group(2)
+                tests.append({'name': test_name, 'log_file': log_file})
         else:
             pass
 
-    return bfg_fault_description(issue, summary, type, project, task_url, suite, build_variant,
+    return bfg_fault_description(issue,
+                                 summary,
+                                 type,
+                                 project,
+                                 githash,
+                                 task_url,
+                                 suite,
+                                 build_variant,
                                  tests)
 
 
 class bfg_fault_description:
     """Parse a fault description into type"""
 
-    def __init__(self, issue, summary, type, project, task_url, suite, build_variant, tests):
+    def __init__(self,
+                 issue,
+                 summary,
+                 type,
+                 project,
+                 githash,
+                 task_url,
+                 suite,
+                 build_variant,
+                 tests):
         self.issue = issue
         self.summary = summary
         self.type = type
         self.project = project
+        self.githash = githash
         self.task_url = task_url
         self.suite = suite
         self.build_variant = build_variant
@@ -106,6 +118,7 @@ class BFGCustomEncoder(json.JSONEncoder):
                 "type": obj.type,
                 "task_url": obj.task_url,
                 "project": obj.project,
+                "githash": obj.githash,
                 "suite": obj.suite,
                 "build_variant": obj.build_variant,
                 "tests": obj.tests
@@ -145,8 +158,11 @@ class bfg_analyzer(object):
         bfs = []
 
         for result in results:
-            bfs.append(
-                ParseJiraTicket(result.key, result.fields.summary, result.fields.description))
+            bfs.append(ParseJiraTicket(
+                result.key,
+                result.fields.summary,
+                result.fields.description
+            ))
 
         # Save to disk to help investigation of bad results
         bfs_str = json.dumps(bfs, cls=BFGCustomEncoder, indent="\t")
@@ -161,6 +177,10 @@ class bfg_analyzer(object):
 
         for bf in bfs:
             self.process_bf(bf, results)
+            jira_issue = self.jira_client.get_bfg_issue(bf["issue"])
+            jira_issue.fields.labels.append("bot-analyzed")
+            print("LABELS: " + str(jira_issue.fields.labels))
+            jira_issue.add_field_value("labels", "bot-analyzed")
 
         return results
 
@@ -222,10 +242,8 @@ class bfg_analyzer(object):
         """
         self.create_bf_cache(bf)
 
-        bf_name = bf['summary']
         print("BF: " + str(bf))
 
-        cache_dir = bf["bf_cache"]
         system_log_url = buildbaron.analyzer.evergreen.task_get_system_raw_log(bf['task_url'])
         task_log_file_url = buildbaron.analyzer.evergreen.task_get_task_raw_log(bf["task_url"])
 
@@ -284,7 +302,8 @@ class bfg_analyzer(object):
             self.add_system_failure_comment(bf, bf['task_log_file_url'], faults)
 
         for f in analyzer.get_faults():
-            print(f)
+            buildbaron.analyzer.extract_backtrace.add_fault_comment(
+                self.jira_client, bf["issue"], bf["githash"], f)
 
         summary_str = analyzer.to_json()
         summary_obj = json.loads(summary_str)
@@ -338,7 +357,11 @@ class bfg_analyzer(object):
             #  self.add_system_failure_comment(bf, log_file_url, faults)
 
         for f in analyzer.get_faults():
-            print(f)
+            buildbaron.analyzer.extract_backtrace.add_fault_comment(
+                self.jira_client,
+                bf["issue"],
+                bf["githash"],
+                f)
 
         summary_str = analyzer.to_json()
         summary_obj = json.loads(summary_str)
@@ -376,7 +399,30 @@ class bfg_analyzer(object):
 
         analyzer.analyze()
 
+        for fault in analyzer.get_faults():
+            buildbaron.analyzer.extract_backtrace.add_fault_comment(
+                self.jira_client,
+                bf["issue"],
+                bf["githash"],
+                fault)
+
         incomplete_tests = analyzer.get_incomplete_tests()
+        for incomplete_test in incomplete_tests:
+            jira_issue = self.jira_client.get_bfg_issue(bf["issue"])
+            timeout_comment = (
+                "*" +
+                incomplete_test["name"] +
+                " timed out* - [Logs|" +
+                incomplete_test["log_file"] +
+                "]"
+            )
+            try:
+                if "bot-analyzed" not in jira_issue.fields.labels:
+                    jira_issue.update(
+                        description=jira_issue.fields.description +
+                        "\n{0}\n".format(timeout_comment))
+            except buildbaron.analyzer.jira_client.JIRAError as e:
+                print("Error updating jira: " + str(e))
 
         if len(incomplete_tests) == 0:
             faults = analyzer.get_faults()
@@ -402,9 +448,7 @@ class bfg_analyzer(object):
             bf['tests'] = incomplete_tests
 
     def process_test(self, bf, test, results):
-        bf_name = bf['summary']
         self.create_test_cache(bf, test)
-        test_name = bf_name + " " + test['name']
 
         cache_dir = test["cache"]
         log_file = os.path.join(cache_dir, "test.log")
@@ -415,72 +459,81 @@ class bfg_analyzer(object):
             if key != 'tests' and key != 'name':
                 nested_test[key] = bf[key]
 
+        faults = []
+
         oom_analyzer = self.check_for_oom_killer(bf)
-        if oom_analyzer is None:
-            # If logkeeper is down, we will not have a log file :-(
-            if test["log_file"] is not None and test["log_file"] != "" and "test/None" not in test[
-                    'log_file'] and "log url not available" not in test['log_file']:
+        if oom_analyzer:
+            faults.extend(oom_analyzer.get_faults())
 
-                if not os.path.exists(log_file):
-                    buildbaron.analyzer.logkeeper.retieve_raw_log(test["log_file"], log_file)
+        # If logkeeper is down, we will not have a log file :-(
+        if test["log_file"] is not None and test["log_file"] != "" and "test/None" not in test[
+                "log_file"] and "log url not available" not in test["log_file"]:
 
-                test['log_file_url'] = buildbaron.analyzer.logkeeper.get_raw_log_url(
-                    test["log_file"])
+            if not os.path.exists(log_file):
+                buildbaron.analyzer.logkeeper.retieve_raw_log(test["log_file"], log_file)
 
-                log_file_stat = os.stat(log_file)
+            test["log_file_url"] = buildbaron.analyzer.logkeeper.get_raw_log_url(
+                test["log_file"])
 
-                if log_file_stat[stat.ST_SIZE] > 50 * 1024 * 1024:
-                    summary_str = "Skipping Large File : " + str(log_file_stat[stat.ST_SIZE])
-                    results.append({"test": nested_test, "summary": summary_str})
-                    return
-            else:
-                test['log_file_url'] = "none"
-                with open(log_file, "wb") as lfh:
-                    lfh.write("Logkeeper was down\n".encode())
-
-                log_file_stat = os.stat(log_file)
-
-            if os.path.exists(summary_json):
-                with open(summary_json, "rb") as sjh:
-                    contents = sjh.read().decode('utf-8')
-                    summary_str = json.loads(contents)
-
-                results.append({"test": nested_test, "summary": summary_str})
-                return
+            log_file_stat = os.stat(log_file)
 
             if log_file_stat[stat.ST_SIZE] > 50 * 1024 * 1024:
-                print("Skipping Large File : " + str(log_file_stat[stat.ST_SIZE]) + " at " + str(
-                    log_file))
-                print(summary_str)
-                summary_obj = summary_str
-            else:
-                with open(log_file, "rb") as lfh:
-                    log_file_str = lfh.read().decode('utf-8')
-
-                print("Checking Log File")
-                LFS = buildbaron.analyzer.log_file_analyzer.LogFileSplitter(log_file_str)
-
-                s = LFS.getsplits()
-
-                analyzer = buildbaron.analyzer.log_file_analyzer.LogFileAnalyzer(s)
-
-                analyzer.analyze()
-
-                faults = analyzer.get_faults()
-
-                if len(faults) == 0:
-                    print("===========================")
-                    print("Analysis failed for test: " + self.pp.pformat(bf))
-                    print("To Debug: python analyzer" + os.path.sep + "log_file_analyzer.py " +
-                          log_file)
-                    print("===========================")
+                summary_str = "Skipping Large File : " + str(log_file_stat[stat.ST_SIZE])
+                results.append({"test": nested_test, "summary": summary_str})
+                return
         else:
-            # Well, we hit an oom, ignore the test
-            test['log_file_url'] = "none"
-            analyzer = oom_analyzer
+            test["log_file_url"] = "none"
+            with open(log_file, "wb") as lfh:
+                lfh.write("Logkeeper was down\n".encode())
 
-        for f in analyzer.get_faults():
-            print(f)
+            log_file_stat = os.stat(log_file)
+
+        if log_file_stat[stat.ST_SIZE] > 50 * 1024 * 1024:
+            print("Skipping Large File : " + str(log_file_stat[stat.ST_SIZE]) + " at " + str(
+                log_file))
+            print(summary_str)
+            summary_obj = summary_str
+        else:
+            with open(log_file, "rb") as lfh:
+                log_file_str = lfh.read().decode('utf-8')
+
+        print("Checking Log File")
+        LFS = buildbaron.analyzer.log_file_analyzer.LogFileSplitter(log_file_str)
+        analyzer = buildbaron.analyzer.log_file_analyzer.LogFileAnalyzer(LFS.get_streams())
+
+        analyzer.analyze()
+
+        faults.extend(analyzer.get_faults())
+
+        if test["name"].startswith("basic") and test["name"].endswith(".js"):
+            print("Anlyzing basic.js or basicPlus.js failure")
+            parallel_analyzer = \
+                buildbaron.analyzer.parallel_failure_analyzer.ParallelTestFailureAnalyzer(
+                    log_file_str)
+            parallel_analyzer.analyze()
+            faults.extend(parallel_analyzer.get_faults())
+
+        if len(faults) == 0:
+            print("===========================")
+            print("Analysis failed for test: " + self.pp.pformat(bf))
+            print("To Debug: python analyzer" + os.path.sep + "log_file_analyzer.py " +
+                  log_file)
+            print("===========================")
+
+        for fault in faults:
+            buildbaron.analyzer.extract_backtrace.add_fault_comment(
+                self.jira_client,
+                bf["issue"],
+                bf["githash"],
+                fault)
+
+        if os.path.exists(summary_json):
+            with open(summary_json, "rb") as sjh:
+                contents = sjh.read().decode('utf-8')
+                summary_str = json.loads(contents)
+
+            results.append({"test": nested_test, "summary": summary_str})
+            return
 
         summary_str = analyzer.to_json()
         summary_obj = json.loads(summary_str)
@@ -510,7 +563,7 @@ class bfg_analyzer(object):
         return None
 
     def add_system_failure_comment(self, bf, log_file_url, faults):
-        if UPDATE_JIRA == True:
+        if UPDATE_JIRA:
             issue = self.jira_client.issue(bf['issue'])
             comments = issue.fields.comment.comments
         else:
@@ -534,60 +587,32 @@ class bfg_analyzer(object):
 """ % (log_file_url, log_file_url_line, fault.context)
             print(message)
 
-            if UPDATE_JIRA == True:
+            if UPDATE_JIRA:
                 print("Updating Jira issue '%s'" % issue.key)
                 self.jira_client.add_comment(issue.key, message)
 
 
-def tests1():
-    a1 = ParseJiraTicket(
-        1, "Timed Out: sharding_csrs_upgrade_WT on Enterprise Windows [MongoDB (3.2) @ 190538da]",
-        """
-h2. [sharding_csrs_upgrade_WT failed on Enterprise Windows|https://evergreen.mongodb.com/task/mongodb_mongo_v3.2_enterprise_windows_64_sharding_csrs_upgrade_WT_190538da7580eee02ab36993c426bf9b94005247_17_01_25_15_41_26]
-Host: [ec2-54-161-188-84.compute-1.amazonaws.com|https://evergreen.mongodb.com/host/sir-rhmr5irg]
-Project: [MongoDB (3.2)|https://evergreen.mongodb.com/waterfall/mongodb-mongo-v3.2]
-""")
-
-    a2 = ParseJiraTicket(2, "System Failure: push on SSL SUSE 12 [MongoDB (master) @ ae048229]", """
-h2. [push failed on SSL SUSE 12|https://evergreen.mongodb.com/task/mongodb_mongo_master_suse12_push_ae04822985f2478c7da1e6821f5fc91b484b9555_17_01_23_18_03_09]
-Host: [ec2-54-92-136-107.compute-1.amazonaws.com|https://evergreen.mongodb.com/host/sir-yfvg7m3h]
-Project: [MongoDB (master)|https://evergreen.mongodb.com/waterfall/mongodb-mongo-master]
-""")
-
-    a3 = ParseJiraTicket(
-        3,
-        "Failures: aggregation_read_concern_majority_passthrough_WT on ~ Enterprise RHEL 6.2 DEBUG Code Coverage (error.js, error:CheckReplOplogs) [MongoDB (3.4) @ c91a4d4e]",
-        """
-h2. [aggregation_read_concern_majority_passthrough_WT failed on ~ Enterprise RHEL 6.2 DEBUG Code Coverage|https://evergreen.mongodb.com/task/mongodb_mongo_v3.4_enterprise_rhel_62_64_bit_coverage_aggregation_read_concern_majority_passthrough_WT_c91a4d4eda70f11ecd4ce21d57fd9a57e889df70_17_01_25_15_37_12]
-Host: [ec2-107-22-100-90.compute-1.amazonaws.com|https://evergreen.mongodb.com/host/sir-aqfi5mij]
-Project: [MongoDB (3.4)|https://evergreen.mongodb.com/waterfall/mongodb-mongo-v3.4]
-*error.js* - [Logs|https://logkeeper.mongodb.org/build/93669f7c42bf42420db8f8f8fbf95910/test/5888ebdfc2ab683cbd04be4c/] | [History|https://evergreen.mongodb.com/task_history/mongodb-mongo-v3.4/aggregation_read_concern_majority_passthrough_WT#error.js=fail]
-*error:CheckReplOplogs* - [Logs|https://logkeeper.mongodb.org/build/93669f7c42bf42420db8f8f8fbf95910/test/5888ef97c2ab683cbd05404b/] | [History|https://evergreen.mongodb.com/task_history/mongodb-mongo-v3.4/aggregation_read_concern_majority_passthrough_WT#error:CheckReplOplogs=fail]
-""")
-
-    #print(str(a3.tests));
-
-    #print(a1.to_json())
-    #print(a2.to_json())
-    #print(a3.to_json())
-
-    a4 = json.loads(a3.to_json(), cls=BFGCustomDecoder)
-
-
 def query_bfg_str(start, end):
     # Dates should be formatted as 2017-01-25
-    return 'project = bfg AND resolution is EMPTY AND created > %s AND created <= %s AND summary !~ "System Failure:" ORDER BY created DESC' % (
-        start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+    return ('project = bfg'
+            ' AND resolution is EMPTY'
+            ' AND created > {createdStart}'
+            ' AND created <= {createdEnd}'
+            ' AND summary !~ "System Failure:"'
+            ' ORDER BY created DESC'.format(
+                createdStart=start.strftime("%Y-%m-%d"),
+                createdEnd=end.strftime("%Y-%m-%d")))
 
 
 def get_last_week_query():
     today = datetime.date.today()
 
-    # The start of build baron - if today is Wednesday, returns prior Wednesday otherwise return prior x2 Wednesday
+    # The start of build baron - if today is Wednesday, returns prior Wednesday otherwise return
+    # prior x2 Wednesday
     last_wednesday = today + dateutil.relativedelta.relativedelta(
         weekday=dateutil.relativedelta.WE(-2))
 
-    # Tne end of build baron
+    # The end of build baron
     last_tuesday = today + dateutil.relativedelta.relativedelta(
         weekday=dateutil.relativedelta.TU(-1))
 
@@ -597,19 +622,19 @@ def get_last_week_query():
 def get_this_week_query():
     today = datetime.date.today()
 
-    # The start of build baron - if today is Wednesday, returns today otherwise prior Wednesday
-    this_wednesday = today + dateutil.relativedelta.relativedelta(
+    # The start of build baron - last Wednesday (or today if today is Wednesday)
+    next_wednesday = today + dateutil.relativedelta.relativedelta(
         weekday=dateutil.relativedelta.WE(-1))
 
-    # Tne end of build baron
+    # The end of build baron - this Wednesday
     this_tuesday = today + dateutil.relativedelta.relativedelta(
-        weekday=dateutil.relativedelta.TU(1))
+        weekday=dateutil.relativedelta.WE(1))
 
-    return query_bfg_str(this_wednesday, this_tuesday)
+    return query_bfg_str(next_wednesday, this_tuesday)
 
 
 def main():
-    tests1()
+    # tests1()
 
     parser = argparse.ArgumentParser(description='Analyze test failure in jira.')
 
@@ -643,28 +668,24 @@ def main():
 
     print("Query: %s" % query_str)
 
-    try:
-        jira_client = buildbaron.analyzer.jira_client.jira_client(args.jira_server, args.jira_user)
+    jira_client = buildbaron.analyzer.jira_client.jira_client(args.jira_server, args.jira_user)
 
-        bfa = bfg_analyzer(jira_client)
+    bfa = bfg_analyzer(jira_client)
 
-        bfs = bfa.query(query_str)
+    bfs = bfa.query(query_str)
 
-        failed_bfs = bfa.check_logs(bfs)
+    failed_bfs = bfa.check_logs(bfs)
 
-        print("Total BFs to investigate %d\n" % len(failed_bfs))
+    print("Total BFs to investigate %d\n" % len(failed_bfs))
 
-        failed_bfs_root = {
-            'query': query_str,
-            'date': datetime.datetime.now().isoformat(' '),
-            'bfs': failed_bfs
-        }
+    failed_bfs_root = {
+        'query': query_str,
+        'date': datetime.datetime.now().isoformat(' '),
+        'bfs': failed_bfs
+    }
 
-        with open("failed_bfs.json", "w", encoding="utf8") as sjh:
-            json.dump(failed_bfs_root, sjh, indent="\t")
-
-    except Exception as e:
-        print("Exception:" + str(e))
+    with open("failed_bfs.json", "w", encoding="utf8") as sjh:
+        json.dump(failed_bfs_root, sjh, indent="\t")
 
 
 if __name__ == '__main__':
