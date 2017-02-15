@@ -3,7 +3,6 @@ Jira Client and utility operations
 """
 import getpass
 import re
-import requests
 import threading
 
 from jira import JIRA, JIRAError
@@ -137,10 +136,12 @@ class jira_client(object):
         except JIRAError as e:
             print("Error updating duplicate issue's Buildvariants: " + str(e))
 
-    def build_backtraces(self, fault, gui_github_url_base, raw_github_url_base):
+    def add_github_backtrace_context(self, issue_string, backtrace):
         """
-        returns a list of strings representing a backtrace, as well as a parsed version represented
-        as a list of objects of the form
+        Given a backtrace represented as follows, appends some nicely formatted previews of the code
+        involved in the backtrace and adds them to the issue's description.
+
+        A backtrace is a list of frames, specified as follows:
         {
           "github_url": "https://github.com/mongodb/mongo/blob/deadbeef/jstests/core/test.js#L42",
           "first_line_number": 37,
@@ -150,112 +151,61 @@ class jira_client(object):
           "lines": ["line 37", "line 38", ..., "line 47"]
         }
         """
-
-        trace = []
-        # Also populate a plain-text style backtrace, with github links to frames.
-        raw_trace = ["Extracted stack trace:", "{noformat}"]
-
-        extracting_regex = re.compile(
-            "([a-zA-Z0-9\./]*)@((?:[a-zA-Z0-9_()]+/?)+\.js):(\d+)(?::\d+)?$")
-        n_lines_of_context = 5
-
-        stack_lines = fault.context.splitlines()
-
-        # Sometimes stack traces appear twice: once printed by the assert.js before throwing it, and
-        # once by the shell, where all exceptions are printed. Here we ignore the first stack trace
-        # and focus on the one printed by the shell.
-        if "" in stack_lines:
-            stack_lines = stack_lines[stack_lines.index("") + 1:]
-
-        for line in stack_lines:
-            line = line.replace("\\", "/")  # Normalize separators.
-            stack_match = extracting_regex.search(line)
-            if stack_match is None:
-                raw_trace.append(line)
-                continue
-
-            (func_name, file_path, line_number) = stack_match.groups()
-            gui_github_url = gui_github_url_base + file_path + "#L" + line_number
-            line_number = int(line_number)
-            raw_trace.append("%s@%s:%d" % (func_name, file_path, line_number))
-
-            # add a {code} frame to the comment, showing the line involved in the stack trace, with
-            # some context of surrounding lines. Don't do this for the stack frames within
-            # assert.js, since they aren't very interesting.
-            if file_path.endswith("assert.js"):
-                continue
-
-            raw_github_url = raw_github_url_base + file_path
-            raw_code = requests.get(raw_github_url).text
-            start_line = max(0, line_number - n_lines_of_context)
-            end_line = line_number + n_lines_of_context
-            code_context = raw_code.splitlines()[start_line:end_line]
-
-            file_name = file_path[file_path.rfind("/") + 1:]
-            trace.append({
-                "github_url": gui_github_url,
-                "first_line_number": start_line,
-                "line_number": line_number,
-                "file_path": file_path,
-                "file_name": file_name,
-                "lines": code_context
-            })
-        raw_trace.append("{noformat}")
-        print(trace)
-
-        return raw_trace, trace
-
-    def add_fault_comment(self, issue_string, githash, fault):
-        """
-        TODO
-        """
-        jira_issue = self.get_bfg_issue(issue_string)
-
-        raw_github_url_base = "https://raw.githubusercontent.com/mongodb/mongo/" + githash + "/"
-        gui_github_url_base = "https://github.com/mongodb/mongo/blob/" + githash + "/"
-
         new_description_lines = [""]
-        if fault.category == "js backtrace":
-            raw_trace, trace = self.build_backtraces(fault,
-                                                     gui_github_url_base,
-                                                     raw_github_url_base)
-            new_description_lines.extend(raw_trace)
-            new_description_lines.append("\n")
+        for i in range(len(backtrace)):
+            frame = backtrace[i]
+            frame_title = "Frame {frame_number}: [{path}:{line_number}|{url}]".format(
+                frame_number=len(backtrace) - (i + 1),
+                path=frame["file_path"],
+                line_number=frame["line_number"],
+                url=frame["github_url"]
+            )
 
-            for i in range(len(trace)):
-                frame = trace[i]
-                frame_title = "Frame {frame_number}: [{path}:{line_number}|{url}]".format(
-                    frame_number=len(trace) - (i + 1),
-                    path=frame["file_path"],
-                    line_number=frame["line_number"],
-                    url=frame["github_url"]
-                )
+            # raw text is 0-based, code lines are 1-based.
+            first_line = frame["first_line_number"] + 1
+            code_block_header = (
+                "{code:js|title=%s|linenumbers=true|firstline=%d|highlight=%d}" %
+                (frame["file_name"], first_line, frame["line_number"])
+            )
 
-                # raw text is 0-based, code lines are 1-based.
-                first_line = frame["first_line_number"] + 1
-                code_block_header = (
-                    "{code:js|title=%s|linenumbers=true|firstline=%d|highlight=%d}" %
-                    (frame["file_name"], first_line, frame["line_number"])
-                )
+            new_description_lines.append("")
+            new_description_lines.append(frame_title)
+            new_description_lines.append(code_block_header)
+            new_description_lines.extend(frame["lines"])
+            new_description_lines.append("{code}")
 
-                new_description_lines.append("")
-                new_description_lines.append(frame_title)
-                new_description_lines.append(code_block_header)
-                new_description_lines.extend(frame["lines"])
-                new_description_lines.append("{code}")
-        else:
-            new_description_lines = [
+        self.append_to_issue_description(issue_string, new_description_lines)
+
+    def add_fault_comment(self, issue_string, fault):
+        """
+        Adds a {noformat} block to the jira ticket's description summarizing the fault that we have
+        extracted from the logs.
+        """
+        self.append_to_issue_description(
+            issue_string,
+            [
+                "",
                 "Extracted {fault_type}: ".format(fault_type=fault.category),
                 "{noformat}",
                 fault.context,
                 "{noformat}"
             ]
+        )
 
-        print("Updating issue description: \n" + "\n".join(new_description_lines))
+    def append_to_issue_description(self, issue_string, new_lines):
+        """
+        Adds the given text to the bottom of the given issue's description.
+
+        If the ticket has already been tagged with the 'bot-analyzed' tag, no update occurs.
+        """
+        jira_issue = self.get_bfg_issue(issue_string)
         try:
             if "bot-analyzed" not in jira_issue.fields.labels:
+                print("Updating issue description: \n" + "\n".join(new_lines))
                 jira_issue.update(
-                    description=jira_issue.fields.description + "\n".join(new_description_lines))
+                    description=jira_issue.fields.description + "\n".join(new_lines))
+            else:
+                print("Skipping issue update, since issue is already tagged with 'bot-analyzed'")
         except jira_client.JIRAError as e:
             print("Error updating JIRA: " + str(e))
 
@@ -295,7 +245,7 @@ class jira_client(object):
                 type='Duplicate', inwardIssue=issue, outwardIssue=duplicate_issue)
 
             # Update affectsVersions, Buildvariants, etc.
-            title_parsing_regex = re.compile("(Timed Out|Failure):"
+            title_parsing_regex = re.compile("(Timed Out|Failures?):"
                                              " (?P<suite_name>.*?)"
                                              " on"
                                              " (?P<variant_prefix>[^\(\[]+)"
@@ -307,7 +257,7 @@ class jira_client(object):
                                              "\(ephemeralForTest\)|"
                                              "\(Unoptimized\))(?: DEBUG)?)?"
                                              " (?:\("
-                                             "(?P<test_name>.*?(?:\.js|CheckReplDBHash))"
+                                             "(?P<test_names>(.*?(\.js|CheckReplDBHash)(, )?)*)"
                                              "\))? ?\[MongoDB \("
                                              "(?P<version>.*?)"
                                              "\) @ [0-9A-Za-z]+\]")

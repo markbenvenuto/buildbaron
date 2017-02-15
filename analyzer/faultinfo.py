@@ -6,12 +6,13 @@ import json
 
 # In the future, add tests cases for test result classification
 #
-class FaultInfo:
-    """Describes a fault or a context from a log file that caused it to fail
-       Source - Shell, MongoD, etc
-       Category - js assert, seg fault, etc
-       Context - lines from file
-       Line number - line number in log file
+class FaultInfo(object):
+    """
+    Describes a fault or a context from a log file that caused it to fail
+    Source - Shell, MongoD, etc
+    Category - js assert, seg fault, etc
+    Context - lines from file
+    Line number - line number in log file
     """
 
     def __init__(self, source, category, context, line_number):
@@ -24,6 +25,14 @@ class FaultInfo:
         return "FaultInfo -- {0} - {1}\n{2}".format(self.source,
                                                     self.category,
                                                     self.context)
+
+    def to_json(self):
+        return {
+            "source": self.source,
+            "category": self.category,
+            "context": self.context,
+            "line_number": self.line_number
+        }
 
 
 class CustomEncoder(json.JSONEncoder):

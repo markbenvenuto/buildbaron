@@ -107,11 +107,14 @@ def failure():
 
     failed_bf = None
 
-    for ft in failed_bfs:
-        if ft["test"]["issue"] == issue and test_name == ft["test"]["name"]:
-            failed_bf = ft
+    for bfg in failed_bfs:
+        if bfg["bfg_info"]["issue"] == issue:
+            failed_bf = bfg
 
-    assert (failed_bf is not None), "could not find matching test. Looking for issue '{0}' within {1}".format(ft["test"]["name"], [bf["test"]["name"] for bf in failed_bfs])
+    assert (failed_bf is not None), ("could not find matching test. "
+                                     "Looking for issue '{0}' within {1}".format(
+                                         issue,
+                                         [bf["bfg_info"]["issue"] for bf in failed_bfs]))
 
     # Predicates
     def remove_special_characters(string):
@@ -121,21 +124,34 @@ def failure():
                 new_string += c
         return new_string
 
-    print(failed_bf)
-    jira_text_terms = [os.path.basename(test_name), failed_bf['test']['suite']]
-    if (failed_bf.get("summary") and type(failed_bf["summary"]) != str and failed_bf["summary"]["faults"]):
-        jira_text_terms.extend([remove_special_characters(fault["context"].splitlines()[0]) for fault in
-                                failed_bf["summary"]["faults"]])
+    def flatten(a):
+        flattened = []
+        for elem in a:
+            if type(elem) == list:
+                flattened.extend(elem)
+            else:
+                flattened.append(elem)
+        return flattened
+    jira_text_terms = [os.path.basename(test_name), failed_bf['bfg_info']['suite']]
+    all_faults = (
+        failed_bf["faults"] +
+        flatten([testinfo["faults"] for testinfo in failed_bf["test_faults"]])
+    )
+
+    jira_text_terms.extend(
+        [remove_special_characters(fault["context"].splitlines()[0]) for fault in all_faults])
     jc = get_jira_client()
     jira_query = jc.query_duplicates_text(jira_text_terms)
     issues = jc.search_issues(jira_query)
 
     issues.sort(key=issue_sort)
 
-    is_system_failure = "System Failure" in failed_bf['test']['summary']
+    is_system_failure = "System Failure" in failed_bf['bfg_info']['summary']
 
     # Query for the last few issues the user has looked at
-    recent_issues_query = "issuekey in issueHistory() and project in (bf, server, evg, build) ORDER BY lastViewed DESC"
+    recent_issues_query = ("issuekey in issueHistory()"
+                           " and project in (bf, server, evg, build)"
+                           " ORDER BY lastViewed DESC")
     recent_issues = jc.search_issues(recent_issues_query)
 
     recent_issues.sort(key=issue_sort)

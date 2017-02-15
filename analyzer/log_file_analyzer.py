@@ -175,7 +175,7 @@ class LogFileAnalyzer:
         },
         {
             "fault_type": "js error",
-            "begin_regex_string": r"(^Error: |assert .*failed :)",
+            "begin_regex_string": r"(Error: |assert.*failed)",
             "multi_line": True,
             "end_regex_string": r".*?\.js:[0-9]+(:[0-9]+)?$",
         },
@@ -184,6 +184,10 @@ class LogFileAnalyzer:
             "begin_regex_string": r"@[a-zA-Z0-9_/\\<> ]+(\.js|eval):[0-9]+(:[0-9]+)?$",
             "multi_line": True,
             "end_regex_string": r"[^0-9]$",
+        },
+        {
+            "fault_type": "failure to load",
+            "regex_string": r"failed to load:",
         },
         {
             "fault_type": "unittest failure",
@@ -236,6 +240,8 @@ class LogFileAnalyzer:
         while (line_number < len(lines) and
                end_regex.search(lines[line_number].get_line()) is None):
             line_number += 1
+        if line_number == start_line:
+            line_number = start_line + 1
         return line_number, lines[start_line:line_number]
 
     def extract_faults_from_stream(self, stream, fault_specs):

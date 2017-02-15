@@ -2,125 +2,159 @@
 
 {% block content %}
 
-<h2>{{ title }}: <a href="https://jira.mongodb.org/browse/{{failed_bf["test"]["issue"]}}">{{failed_bf["test"]["issue"]}}</a><br /></h2>
-<h3>{{failed_bf["test"]["summary"]}}</h3>
-
-    <a href="{{failed_bf["test"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["test"]["log_file_url"]}}">Test or Task Raw Log File</a><br/>
-    <a href="{{failed_bf["test"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["test"]["system_log_url"]}}">Task System Raw Log File</a><br />
-    {% if failed_bf["summary"]["faults"] %}
-        {% for fault_info in failed_bf["summary"]["faults"] %}
-            <b>Faults</b><br/>
-            <b>Category: {{fault_info["category"] }}</b><br />
-            <b>Source: </b>{{fault_info["source"]}}<br />
-            <b>Log Lines: </b> <a href="{{failed_bf["test"]["log_file_url"]|tohtml_logurl}}#L{{fault_info["line_number"]}}">Log File Fault</a><pre>{{fault_info["context"]}}</pre><br />
-            <br/>
+<div class='container-fluid'>
+<div class='col-md-7'>
+  <h2>{{ title }}: <a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br /></h2>
+  <h3>{{failed_bf["bfg_info"]["summary"]}}</h3>
+  <a href="{{failed_bf["bfg_info"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["log_file_url"]}}">Test or Task Raw Log File</a><br/>
+  <a href="{{failed_bf["bfg_info"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["system_log_url"]}}">Task System Raw Log File</a><br />
+  {% for fault_info in failed_bf["faults"] %}
+    <b>Category: {{fault_info["category"]}}</b><br />
+    <b>Source: </b>{{fault_info["source"]}}<br />
+    <b>Log Lines: </b> <a href="{{failed_bf["bfg_info"]["log_file_url"]|tohtml_logurl}}#L{{fault_info["line_number"]}}">Log File Fault</a>
+    <div class='buildbaron-noformat'>
+      <table>
+        {% for line in fault_info["context"].splitlines() %}
+          <tr>
+            <td class='buildbaron-code-line-td'>
+              <pre class='code-line'><span>{{line}}</span></pre>
+            </td>
+          </tr>
         {% endfor %}
-    {% else  %}
-    <b>TODO: add support for analyzing this failure</b><pre>python3 analyzer/log_file_analyzer.py {{failed_bf["test"]["cache"]}}/test.log</pre><br/>
-    {% endif %}
-    {% if failed_bf["summary"]["contexts"] %}
-        <b>Additional Context</b><br />
-        {% for context_info in failed_bf["summary"]["contexts"] %}
-            <b>Category: {{context_info["category"] }}</b><br />
-            <b>Source: </b>{{context_info["source"]}}<br />
-            <b>Log Lines: </b><pre>{{context_info["context"]}}</pre><br />
-        {% endfor %}
-    <b>Contexts???</b>
-    {% else  %}
-    <b>TODO: add support for adding context to this failure</b><pre>python3 analyzer/log_file_analyzer.py {{failed_bf["test"]["cache"]}}/test.log</pre><br />
-    {% endif %}
+      </table>
+    </div>
+    <br/>
+  {% endfor %}
+  {% for test_info in failed_bf["test_faults"] %}
+    <b>Faults from test {{test_info["test"]}}</b><br />
+    {% for test_fault_info in test_info["faults"] %}
+        <b>Category: {{test_fault_info["category"]}}</b><br />
+        <div class='buildbaron-noformat'>
+          <table>
+            {% for line in test_fault_info["context"].splitlines() %}
+              <tr>
+                <td class='buildbaron-code-line-td'>
+                  <pre class='code-line'><span>{{line}}</span></pre>
+                </td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% endfor %}
+  {% endfor %}
+</div>
 
-<h3>Related build failure and server issues from Jira</h3>
-<h4>Query: {{jira_query}}</h4>
-        {% for issue in issues %}
-
-    <div class="buildbaron-issue">
+<div class='col-md-5'>
+  <div id='buildbaron-related-failures'>
+    <h3>Related build failure and server issues from Jira</h3>
+    <h4 class="buildbaron-jira-query">Query: {{jira_query}}</h4>
+    {% for issue in issues %}
+      <div class="buildbaron-issue">
         {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
-        <div class="buildbaron-row">
+          <div class="buildbaron-row">
         {% else %}
-            <div class="buildbaron-row buildbaron-row-highlight">
+          <div class="buildbaron-row buildbaron-row-highlight">
         {% endif %}
 
-                <span class="buildbaron-issue-summary">
-
-                    <a href="https://jira.mongodb.org/browse/{{issue.key}}">
-                        {{issue.key}}: {{issue.fields.summary}}
-                    </a>
-                </span>
-                {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
-                <span class="buildbaron-issue-status">
-                    {{issue.fields.status.name}}: {{issue.fields.resolution.name}}
-                </span>
-                {% else %}
-                <span class="buildbaron-issue-status">
-                    {{issue.fields.status.name}}
-                </span>
-                {% endif %}
+          <span class="buildbaron-issue-summary">
+            <a href="https://jira.mongodb.org/browse/{{issue.key}}">
+              {{issue.key}}: {{issue.fields.summary}}
+            </a>
+          </span>
+          {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
+            <span class="buildbaron-issue-status">
+              {{issue.fields.status.name}}: {{issue.fields.resolution.name}}
+            </span>
+          {% else %}
+            <span class="buildbaron-issue-status">
+              {{issue.fields.status.name}}
+            </span>
+          {% endif %}
+        </div>
+        <div class="buildbaron-row container-fluid">
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-left">
+              Created:<br/>
+              {{issue.fields.created | date}}
             </div>
-            <div class="buildbaron-row">
-                <div class="buildbaron-issue-detail buildbaron-issue-detail-left">
-                    Created: {{issue.fields.created | date}}
-                </div>
-                <div class="buildbaron-issue-detail buildbaron-issue-detail-middle">
-                    Update: {{issue.fields.updated | date}}
-                </div>
-                <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
-                    Assignee: {{issue.fields.assignee.displayName}}
-                    <div id="close_dup">
-                        <a class="btn btn-danger" href="close_duplicate?issue={{failed_bf["test"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
-                    </div>
-                        </div>
-                    </div>
-                </div>
-        {% endfor %}
-
-<h3>Recent build failure and server issues current user has looked at in jira </h3>
-<h4>Query: {{recent_issues_query}}</h4>
-{% for issue in recent_issues %}
-
-        <div class="buildbaron-issue">
-            {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
-            <div class="buildbaron-row">
-                {% else %}
-                <div class="buildbaron-row buildbaron-row-highlight">
-                    {% endif %}
-
-                    <span class="buildbaron-issue-summary">
-
-                        <a href="https://jira.mongodb.org/browse/{{issue.key}}">
-                            {{issue.key}}: {{issue.fields.summary}}
-                        </a>
-                    </span>
-                    {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
-                    <span class="buildbaron-issue-status">
-                        {{issue.fields.status.name}}: {{issue.fields.resolution.name}}
-                    </span>
-                    {% else %}
-                    <span class="buildbaron-issue-status">
-                        {{issue.fields.status.name}}
-                    </span>
-                    {% endif %}
-                </div>
-                <div class="buildbaron-row">
-                    <div class="buildbaron-issue-detail buildbaron-issue-detail-left">
-                        Created: {{issue.fields.created | date}}
-                    </div>
-                    <div class="buildbaron-issue-detail buildbaron-issue-detail-middle">
-                        Update: {{issue.fields.updated | date}}
-                    </div>
-                    <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
-                        Assignee: {{issue.fields.assignee.displayName}}
-                        <div id="close_dup">
-                            <a class="btn btn-danger" href="close_duplicate?issue={{failed_bf["test"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
-                        </div>
-                    </div>
-                </div>
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-middle">
+              Updated:<br/>
+              {{issue.fields.updated | date}}
             </div>
-            {% endfor %}
-
-            
-            <div id="close_gone">
-            If this is due to a transient machine issue: <a class="btn btn-danger" href="close_goneaway?issue={{failed_bf["test"]["issue"]}}">Close As Gone Away</a>
+          </div>
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
+              Assignee: {{issue.fields.assignee.displayName}}
             </div>
+          </div>
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
+              <div id="close_dup">
+                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf["bfg_info"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
 
-            {% endblock %}
+  <div id="buildbaron-recently-viewed">
+    <h3>Recent build failure and server issues current user has looked at in jira </h3>
+    <h4 class="buildbaron-jira-query">Query: {{recent_issues_query}}</h4>
+    {% for issue in recent_issues %}
+      <div class="buildbaron-issue">
+        {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
+          <div class="buildbaron-row">
+        {% else %}
+          <div class="buildbaron-row buildbaron-row-highlight">
+        {% endif %}
+
+          <span class="buildbaron-issue-summary">
+            <a href="https://jira.mongodb.org/browse/{{issue.key}}">
+              {{issue.key}}: {{issue.fields.summary}}
+            </a>
+          </span>
+          {% if issue.fields.status.name == "Closed" or issue.fields.status.name == "Resolved" %}
+          <span class="buildbaron-issue-status">
+              {{issue.fields.status.name}}: {{issue.fields.resolution.name}}
+          </span>
+          {% else %}
+          <span class="buildbaron-issue-status">
+              {{issue.fields.status.name}}
+          </span>
+          {% endif %}
+        </div>
+        <div class="buildbaron-row container-fluid">
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-left">
+              Created:<br/>
+              {{issue.fields.created | date}}
+            </div>
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-middle">
+              Updated:<br/>
+              {{issue.fields.updated | date}}
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
+              Assignee: {{issue.fields.assignee.displayName}}
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
+              <div id="close_dup">
+                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf["bfg_info"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <div id="close_gone">
+    If this is due to a transient machine issue: <a class="btn btn-danger" href="close_goneaway?issue={{failed_bf["bfg_info"]["issue"]}}">Close As Gone Away</a>
+  </div>
+
+</div>
+{% endblock %}

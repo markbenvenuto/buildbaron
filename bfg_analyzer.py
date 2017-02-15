@@ -12,11 +12,9 @@ import json
 import os
 import pprint
 import re
+import requests
 import stat
 import sys
-
-# Global override
-UPDATE_JIRA = False
 
 if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(os.path.realpath(__file__)))))
@@ -25,7 +23,7 @@ if __name__ == "__main__" and __package__ is None:
 import buildbaron.analyzer.analyzer_config
 import buildbaron.analyzer.evergreen
 import buildbaron.analyzer.evg_log_file_analyzer
-import buildbaron.analyzer.extract_backtrace
+import buildbaron.analyzer.faultinfo
 import buildbaron.analyzer.jira_client
 import buildbaron.analyzer.log_file_analyzer
 import buildbaron.analyzer.logkeeper
@@ -150,7 +148,6 @@ class bfg_analyzer(object):
         self.pp = pprint.PrettyPrinter()
 
     def query(self, query_str):
-        #results = self.jira_client.search_issues("project = bfg AND resolution is EMPTY AND created > 2017-01-25 AND created <= 2017-02-01 and summary ~ Timed ORDER BY created DESC", maxResults=25)
         results = self.jira_client.search_issues(query_str, maxResults=100)
 
         print("Result Count %d" % len(results))
@@ -173,16 +170,15 @@ class bfg_analyzer(object):
         return json.loads(bfs_str)
 
     def check_logs(self, bfs):
-        results = []
+        summaries = []
 
         for bf in bfs:
-            self.process_bf(bf, results)
+            summaries.append(self.process_bf(bf))
             jira_issue = self.jira_client.get_bfg_issue(bf["issue"])
             jira_issue.fields.labels.append("bot-analyzed")
-            print("LABELS: " + str(jira_issue.fields.labels))
             jira_issue.add_field_value("labels", "bot-analyzed")
 
-        return results
+        return summaries
 
     # TODO: parallelize the check_logs function with this since we are network bound
     # builds = thread_map( lambda item : process_bf(base_url, item), commits)
@@ -234,15 +230,22 @@ class bfg_analyzer(object):
         if not os.path.exists(path):
             os.mkdir(path)
 
-    def process_bf(self, bf, results):
-        """Process a log through the log file analyzer
+    def process_bf(self, bf):
+        """
+        Process a log through the log file analyzer
 
-        Saves test information in cache\XXX\test.json
         Saves analysis information in cache\XXX\summary.json
         """
         self.create_bf_cache(bf)
 
         print("BF: " + str(bf))
+
+        summary_json_file = os.path.join(bf["bf_cache"], "summary.json")
+
+        # If we've already analyzed this failure, don't do it again.
+        if os.path.exists(summary_json_file):
+            with open(summary_json_file, "rb") as summary_file:
+                return json.loads(summary_file.read())
 
         system_log_url = buildbaron.analyzer.evergreen.task_get_system_raw_log(bf['task_url'])
         task_log_file_url = buildbaron.analyzer.evergreen.task_get_task_raw_log(bf["task_url"])
@@ -250,36 +253,128 @@ class bfg_analyzer(object):
         bf['system_log_url'] = system_log_url
         bf['task_log_file_url'] = task_log_file_url
 
-        # Handle normal test failures
+        # Will be populated with objects like {"test": <test name>, "faults": [...]}
+        tests_fault_info = []
+        # Will be populated with fault objects.
+        extracted_faults = self.process_task_failure(bf)
         if bf['type'] == 'test_failure':
             # Go through each test
             for test in bf['tests']:
-                self.process_test(bf, test, results)
+                tests_fault_info.append({
+                    "test": test["name"],
+                    "faults": self.process_test(bf, test)
+                })
         elif bf['type'] == 'system_failure':
-            self.process_system_failure(bf, results)
-        elif bf['type'] == 'task_failure':
-            self.process_task_failure(bf, results)
+            extracted_faults.extend(self.process_system_failure(bf))
         elif bf['type'] == 'timed_out':
-            self.process_time_out(bf, results)
+            task_faults, test_faults = self.process_time_out(bf)
+            extracted_faults.extend(task_faults)
+            tests_fault_info.extend(test_faults)
 
-        print("")
+        summary_obj = {
+            "bfg_info": bf,
+            "faults": [fault.to_json() for fault in extracted_faults],
+            "test_faults": [
+                {"test": info["test"], "faults": [fault.to_json() for fault in info["faults"]]}
+                for info in tests_fault_info
+            ],
+            "backtraces": [],
+        }
+        summary_str = json.dumps(summary_obj)
 
-    def process_system_failure(self, bf, results):
+        def flatten(a):
+            flattened = []
+            for elem in a:
+                if type(elem) == list:
+                    flattened.extend(elem)
+                else:
+                    flattened.append(elem)
+            return flattened
+
+        # Update jira tickets to include new information.
+        all_faults = (extracted_faults
+                      + flatten([testinfo["faults"] for testinfo in tests_fault_info]))
+
+        for fault in all_faults:
+            self.jira_client.add_fault_comment(bf["issue"], bf["githash"], fault)
+            if fault.category == "js backtrace":
+                backtrace = self.build_backtrace(fault, bf["githash"])
+                self.jira_client.add_github_backtrace_context(bf["issue"], backtrace)
+                summary_obj["backtraces"].append(backtrace)
+
+        with open(summary_json_file, "wb") as sjh:
+            sjh.write(summary_str.encode())
+
+        return summary_obj
+
+    def build_backtraces(self, fault, githash):
+        """
+        returns a list of strings representing a backtrace, as well as a parsed version represented
+        as a list of objects of the form
+        {
+          "github_url": "https://github.com/mongodb/mongo/blob/deadbeef/jstests/core/test.js#L42",
+          "first_line_number": 37,
+          "line_number": 42,
+          "file": "jstests/core/test.js",
+          "file_name": "test.js",
+          "lines": ["line 37", "line 38", ..., "line 47"]
+        }
+        """
+
+        trace = []
+        # Also populate a plain-text style backtrace, with github links to frames.
+        extracting_regex = re.compile(
+            "([a-zA-Z0-9\./]*)@((?:[a-zA-Z0-9_()]+/?)+\.js):(\d+)(?::\d+)?$")
+        n_lines_of_context = 5
+
+        stack_lines = fault.context.splitlines()
+
+        for line in stack_lines:
+            line = line.replace("\\", "/")  # Normalize separators.
+            stack_match = extracting_regex.search(line)
+            if stack_match is None:
+                continue
+
+            (func_name, file_path, line_number) = stack_match.groups()
+            gui_github_url = (
+                "https://github.com/mongodb/mongo/blob/{githash}/{file_path}#L{line_number}".format(
+                    githash=githash,
+                    file_path=file_path,
+                    line_number=line_number))
+
+            line_number = int(line_number)
+
+            # add a {code} frame to the comment, showing the line involved in the stack trace, with
+            # some context of surrounding lines. Don't do this for the stack frames within
+            # src/mongo/shell, since they tend not to be as interesting.
+            if "src/mongo/shell" in file_path:
+                continue
+
+            raw_github_url = "https://raw.githubusercontent.com/mongodb/mongo/{file_path}".format(
+                file_path=file_path)
+            raw_code = requests.get(raw_github_url).text
+            start_line = max(0, line_number - n_lines_of_context)
+            end_line = line_number + n_lines_of_context
+            code_context = raw_code.splitlines()[start_line:end_line]
+
+            file_name = file_path[file_path.rfind("/") + 1:]
+            trace.append({
+                "github_url": gui_github_url,
+                "first_line_number": start_line,
+                "line_number": line_number,
+                "file_path": file_path,
+                "file_name": file_name,
+                "lines": code_context
+            })
+
+        return trace
+
+    def process_system_failure(self, bf):
         cache_dir = bf["bf_cache"]
         log_file = os.path.join(cache_dir, "test.log")
-        summary_json = os.path.join(cache_dir, "summary.json")
 
         bf['log_file_url'] = bf['task_log_file_url']
         bf['name'] = 'task'
-        bf['cache'] = bf['bf_cache']
-
-        if os.path.exists(summary_json) and not UPDATE_JIRA:
-            with open(summary_json, "rb") as sjh:
-                contents = sjh.read().decode('utf-8')
-                summary_str = json.loads(contents)
-
-            results.append({"test": bf, "summary": summary_str})
-            return
 
         if not os.path.exists(log_file):
             self.evg_client.retrieve_file(bf['task_log_file_url'], log_file)
@@ -295,98 +390,49 @@ class bfg_analyzer(object):
 
         if len(faults) == 0:
             print("===========================")
-            print("Analysis failed for test: " + self.pp.pformat(bf))
+            print("No system failure faults detected: " + self.pp.pformat(bf))
             print("To Debug: python analyzer" + os.path.sep + "log_file_analyzer.py " + log_file)
             print("===========================")
-        else:
-            self.add_system_failure_comment(bf, bf['task_log_file_url'], faults)
 
-        for f in analyzer.get_faults():
-            buildbaron.analyzer.extract_backtrace.add_fault_comment(
-                self.jira_client, bf["issue"], bf["githash"], f)
+        return faults
 
-        summary_str = analyzer.to_json()
-        summary_obj = json.loads(summary_str)
-
-        with open(summary_json, "wb") as sjh:
-            sjh.write(summary_str.encode())
-
-        results.append({"test": bf, "summary": summary_obj})
-
-    def process_task_failure(self, bf, results):
+    def process_task_failure(self, bf):
         cache_dir = bf["bf_cache"]
         log_file = os.path.join(cache_dir, "test.log")
-        summary_json = os.path.join(cache_dir, "summary.json")
 
         bf['log_file_url'] = bf['task_log_file_url']
         bf['name'] = 'task'
-        bf['cache'] = bf['bf_cache']
-
-        if os.path.exists(summary_json):
-            with open(summary_json, "rb") as sjh:
-                contents = sjh.read().decode('utf-8')
-                summary_str = json.loads(contents)
-
-            results.append({"test": bf, "summary": summary_str})
-            return
 
         if not os.path.exists(log_file):
             self.evg_client.retrieve_file(bf['task_log_file_url'], log_file)
 
         with open(log_file, "rb") as lfh:
             log_file_str = lfh.read().decode('utf-8')
+
+        extracted_faults = []
 
         analyzer = buildbaron.analyzer.evg_log_file_analyzer.EvgLogFileAnalyzer(log_file_str)
 
         analyzer.analyze()
 
-        faults = analyzer.get_faults()
+        extracted_faults.extend(analyzer.get_faults())
 
-        if len(faults) == 0:
-            oom_analyzer = self.check_for_oom_killer(bf)
-            if oom_analyzer is None:
-                print("===========================")
-                print("Analysis failed for test: " + self.pp.pformat(bf))
-                print("To Debug: python analyzer" + os.path.sep + "log_file_analyzer.py " +
-                      log_file)
-                print("===========================")
-            else:
-                analyzer = oom_analyzer
-        else:
-            pass
-            #  self.add_system_failure_comment(bf, log_file_url, faults)
+        oom_analyzer = self.check_for_oom_killer(bf)
+        if oom_analyzer is not None:
+            extracted_faults.extend(oom_analyzer.get_faults())
 
-        for f in analyzer.get_faults():
-            buildbaron.analyzer.extract_backtrace.add_fault_comment(
-                self.jira_client,
-                bf["issue"],
-                bf["githash"],
-                f)
+        return extracted_faults
 
-        summary_str = analyzer.to_json()
-        summary_obj = json.loads(summary_str)
-
-        with open(summary_json, "wb") as sjh:
-            sjh.write(summary_str.encode())
-
-        results.append({"test": bf, "summary": summary_obj})
-
-    def process_time_out(self, bf, results):
+    def process_time_out(self, bf):
+        """
+        Returns a list of faults at the task level, and also a list of faults at the test level,
+        which is populated with test faults if any are determined to have timed out.
+        """
         cache_dir = bf["bf_cache"]
         log_file = os.path.join(cache_dir, "test.log")
-        summary_json = os.path.join(cache_dir, "summary.json")
 
         bf['log_file_url'] = bf['task_log_file_url']
         bf['name'] = 'task'
-        bf['cache'] = bf['bf_cache']
-
-        if os.path.exists(summary_json):
-            with open(summary_json, "rb") as sjh:
-                contents = sjh.read().decode('utf-8')
-                summary_str = json.loads(contents)
-
-            results.append({"test": bf, "summary": summary_str})
-            return
 
         if not os.path.exists(log_file):
             self.evg_client.retrieve_file(bf['task_log_file_url'], log_file)
@@ -394,19 +440,25 @@ class bfg_analyzer(object):
         with open(log_file, "rb") as lfh:
             log_file_str = lfh.read().decode('utf-8')
 
+        task_faults = []
+        test_faults = []
         print("Checking " + log_file)
         analyzer = buildbaron.analyzer.timeout_file_analyzer.TimeOutAnalyzer(log_file_str)
 
         analyzer.analyze()
 
-        for fault in analyzer.get_faults():
-            buildbaron.analyzer.extract_backtrace.add_fault_comment(
-                self.jira_client,
-                bf["issue"],
-                bf["githash"],
-                fault)
+        task_faults.extend(analyzer.get_faults())
 
         incomplete_tests = analyzer.get_incomplete_tests()
+
+        if len(incomplete_tests) == 0:
+            if len(task_faults) == 0:
+                print("===========================")
+                print("No faults found for task: " + self.pp.pformat(bf))
+                print("To Debug: python analyzer" + os.path.sep + "timeout_file_analyzer.py " +
+                      log_file)
+                print("===========================")
+
         for incomplete_test in incomplete_tests:
             jira_issue = self.jira_client.get_bfg_issue(bf["issue"])
             timeout_comment = (
@@ -424,46 +476,23 @@ class bfg_analyzer(object):
             except buildbaron.analyzer.jira_client.JIRAError as e:
                 print("Error updating jira: " + str(e))
 
-        if len(incomplete_tests) == 0:
-            faults = analyzer.get_faults()
+            test_faults.extend(self.process_test(bf, incomplete_test))
 
-            if len(faults) == 0:
-                print("===========================")
-                print("Analysis failed for test: " + self.pp.pformat(bf))
-                print("To Debug: python analyzer" + os.path.sep + "timeout_file_analyzer.py " +
-                      log_file)
-                print("===========================")
+        return task_faults, test_faults
 
-            summary_str = analyzer.to_json()
-            summary_obj = json.loads(summary_str)
-
-            with open(summary_json, "wb") as sjh:
-                sjh.write(summary_str.encode())
-
-            results.append({"test": bf, "summary": summary_obj})
-
-        else:
-            for incomplete in incomplete_tests:
-                self.process_test(bf, incomplete, results)
-            bf['tests'] = incomplete_tests
-
-    def process_test(self, bf, test, results):
+    def process_test(self, bf, test):
         self.create_test_cache(bf, test)
 
         cache_dir = test["cache"]
         log_file = os.path.join(cache_dir, "test.log")
-        summary_json = os.path.join(cache_dir, "summary.json")
 
+        # TODO(CWS) what is this?
         nested_test = test
         for key in bf.keys():
             if key != 'tests' and key != 'name':
                 nested_test[key] = bf[key]
 
         faults = []
-
-        oom_analyzer = self.check_for_oom_killer(bf)
-        if oom_analyzer:
-            faults.extend(oom_analyzer.get_faults())
 
         # If logkeeper is down, we will not have a log file :-(
         if test["log_file"] is not None and test["log_file"] != "" and "test/None" not in test[
@@ -478,9 +507,8 @@ class bfg_analyzer(object):
             log_file_stat = os.stat(log_file)
 
             if log_file_stat[stat.ST_SIZE] > 50 * 1024 * 1024:
-                summary_str = "Skipping Large File : " + str(log_file_stat[stat.ST_SIZE])
-                results.append({"test": nested_test, "summary": summary_str})
-                return
+                print("Skipping Large File : " + str(log_file_stat[stat.ST_SIZE]))
+                return []
         else:
             test["log_file_url"] = "none"
             with open(log_file, "wb") as lfh:
@@ -491,11 +519,10 @@ class bfg_analyzer(object):
         if log_file_stat[stat.ST_SIZE] > 50 * 1024 * 1024:
             print("Skipping Large File : " + str(log_file_stat[stat.ST_SIZE]) + " at " + str(
                 log_file))
-            print(summary_str)
-            summary_obj = summary_str
-        else:
-            with open(log_file, "rb") as lfh:
-                log_file_str = lfh.read().decode('utf-8')
+            return []
+
+        with open(log_file, "rb") as lfh:
+            log_file_str = lfh.read().decode('utf-8')
 
         print("Checking Log File")
         LFS = buildbaron.analyzer.log_file_analyzer.LogFileSplitter(log_file_str)
@@ -515,33 +542,12 @@ class bfg_analyzer(object):
 
         if len(faults) == 0:
             print("===========================")
-            print("Analysis failed for test: " + self.pp.pformat(bf))
+            print("No faults found for test: " + self.pp.pformat(bf))
             print("To Debug: python analyzer" + os.path.sep + "log_file_analyzer.py " +
                   log_file)
             print("===========================")
 
-        for fault in faults:
-            buildbaron.analyzer.extract_backtrace.add_fault_comment(
-                self.jira_client,
-                bf["issue"],
-                bf["githash"],
-                fault)
-
-        if os.path.exists(summary_json):
-            with open(summary_json, "rb") as sjh:
-                contents = sjh.read().decode('utf-8')
-                summary_str = json.loads(contents)
-
-            results.append({"test": nested_test, "summary": summary_str})
-            return
-
-        summary_str = analyzer.to_json()
-        summary_obj = json.loads(summary_str)
-
-        with open(summary_json, "wb") as sjh:
-            sjh.write(summary_str.encode())
-
-        results.append({"test": nested_test, "summary": summary_obj})
+        return faults
 
     def check_for_oom_killer(self, bf):
         cache_dir = bf["bf_cache"]
@@ -561,35 +567,6 @@ class bfg_analyzer(object):
             return analyzer
 
         return None
-
-    def add_system_failure_comment(self, bf, log_file_url, faults):
-        if UPDATE_JIRA:
-            issue = self.jira_client.issue(bf['issue'])
-            comments = issue.fields.comment.comments
-        else:
-            comments = []
-        print("Comment count:" + str(len(comments)))
-
-        if len(comments) == 0:
-            # Add a comment with what we learned
-            print("Reporting BF summary to Jira: %s - %s" % (str(bf), log_file_url))
-            self.pp.pformat(faults)
-
-            fault = faults[0]
-
-            # TODO: move this to evergreen module
-            log_file_url_line = log_file_url.replace("&text=true", "#L" + str(fault.line_number))
-            message = """[Raw Log File|%s]
-[Fault Details|%s]:
-{noformat}
-%s
-{noformat}
-""" % (log_file_url, log_file_url_line, fault.context)
-            print(message)
-
-            if UPDATE_JIRA:
-                print("Updating Jira issue '%s'" % issue.key)
-                self.jira_client.add_comment(issue.key, message)
 
 
 def query_bfg_str(start, end):
@@ -614,7 +591,7 @@ def get_last_week_query():
 
     # The end of build baron
     last_tuesday = today + dateutil.relativedelta.relativedelta(
-        weekday=dateutil.relativedelta.TU(-1))
+        weekday=dateutil.relativedelta.WE(-1))
 
     return query_bfg_str(last_wednesday, last_tuesday)
 
@@ -634,8 +611,6 @@ def get_this_week_query():
 
 
 def main():
-    # tests1()
-
     parser = argparse.ArgumentParser(description='Analyze test failure in jira.')
 
     group = parser.add_argument_group("Jira options")
