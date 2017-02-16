@@ -142,6 +142,9 @@ class BFGCustomDecoder(json.JSONDecoder):
 class bfg_analyzer(object):
     """description of class"""
 
+    __STACK_FRAME_EXTRACTING_REGEX = re.compile(
+        "([a-zA-Z0-9\./]*)@((?:[a-zA-Z0-9_()]+/?)+\.js):(\d+)(?::\d+)?$")
+
     def __init__(self, jira_client):
         self.jira_client = jira_client
         self.evg_client = buildbaron.analyzer.evergreen.client()
@@ -296,7 +299,7 @@ class bfg_analyzer(object):
                       + flatten([testinfo["faults"] for testinfo in tests_fault_info]))
 
         for fault in all_faults:
-            self.jira_client.add_fault_comment(bf["issue"], bf["githash"], fault)
+            self.jira_client.add_fault_comment(bf["issue"], fault)
             if fault.category == "js backtrace":
                 backtrace = self.build_backtrace(fault, bf["githash"])
                 self.jira_client.add_github_backtrace_context(bf["issue"], backtrace)
@@ -307,7 +310,7 @@ class bfg_analyzer(object):
 
         return summary_obj
 
-    def build_backtraces(self, fault, githash):
+    def build_backtrace(self, fault, githash):
         """
         returns a list of strings representing a backtrace, as well as a parsed version represented
         as a list of objects of the form
@@ -315,7 +318,8 @@ class bfg_analyzer(object):
           "github_url": "https://github.com/mongodb/mongo/blob/deadbeef/jstests/core/test.js#L42",
           "first_line_number": 37,
           "line_number": 42,
-          "file": "jstests/core/test.js",
+          "frame_number": 0,
+          "file_path": "jstests/core/test.js",
           "file_name": "test.js",
           "lines": ["line 37", "line 38", ..., "line 47"]
         }
@@ -323,17 +327,18 @@ class bfg_analyzer(object):
 
         trace = []
         # Also populate a plain-text style backtrace, with github links to frames.
-        extracting_regex = re.compile(
-            "([a-zA-Z0-9\./]*)@((?:[a-zA-Z0-9_()]+/?)+\.js):(\d+)(?::\d+)?$")
         n_lines_of_context = 5
 
         stack_lines = fault.context.splitlines()
 
-        for line in stack_lines:
-            line = line.replace("\\", "/")  # Normalize separators.
-            stack_match = extracting_regex.search(line)
+        # Traverse the stack frames in reverse.
+        for i in range(len(stack_lines) - 1, -1, -1):
+            line = stack_lines[i].replace("\\", "/")  # Normalize separators.
+            stack_match = bfg_analyzer.__STACK_FRAME_EXTRACTING_REGEX.search(line)
             if stack_match is None:
-                continue
+                if re.search("failed to load", line) is not None:
+                    continue  # skip that line, it's expected.
+                break  # any other line should be the end of the backtrace
 
             (func_name, file_path, line_number) = stack_match.groups()
             gui_github_url = (
@@ -350,8 +355,10 @@ class bfg_analyzer(object):
             if "src/mongo/shell" in file_path:
                 continue
 
-            raw_github_url = "https://raw.githubusercontent.com/mongodb/mongo/{file_path}".format(
-                file_path=file_path)
+            raw_github_url = (
+                "https://raw.githubusercontent.com/mongodb/mongo/{githash}/{file_path}".format(
+                    githash=githash,
+                    file_path=file_path))
             raw_code = requests.get(raw_github_url).text
             start_line = max(0, line_number - n_lines_of_context)
             end_line = line_number + n_lines_of_context
@@ -362,6 +369,7 @@ class bfg_analyzer(object):
                 "github_url": gui_github_url,
                 "first_line_number": start_line,
                 "line_number": line_number,
+                "frame_number": i,
                 "file_path": file_path,
                 "file_name": file_name,
                 "lines": code_context
@@ -605,7 +613,7 @@ def get_this_week_query():
 
     # The end of build baron - this Wednesday
     this_tuesday = today + dateutil.relativedelta.relativedelta(
-        weekday=dateutil.relativedelta.WE(1))
+        weekday=dateutil.relativedelta.WE(2))
 
     return query_bfg_str(next_wednesday, this_tuesday)
 

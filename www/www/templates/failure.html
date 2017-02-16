@@ -4,17 +4,17 @@
 
 <div class='container-fluid'>
 <div class='col-md-7'>
-  <h2>{{ title }}: <a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br /></h2>
-  <h3>{{failed_bf["bfg_info"]["summary"]}}</h3>
-  <a href="{{failed_bf["bfg_info"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["log_file_url"]}}">Test or Task Raw Log File</a><br/>
-  <a href="{{failed_bf["bfg_info"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["system_log_url"]}}">Task System Raw Log File</a><br />
-  {% for fault_info in failed_bf["faults"] %}
-    <b>Category: {{fault_info["category"]}}</b><br />
-    <b>Source: </b>{{fault_info["source"]}}<br />
-    <b>Log Lines: </b> <a href="{{failed_bf["bfg_info"]["log_file_url"]|tohtml_logurl}}#L{{fault_info["line_number"]}}">Log File Fault</a>
+  <h2>{{ title }}: <a href="https://jira.mongodb.org/browse/{{failed_bf.bfg_info.issue}}">{{failed_bf.bfg_info.issue}}</a><br /></h2>
+  <h3>{{failed_bf.bfg_info.summary}}</h3>
+  <a href="{{failed_bf.bfg_info.task_url}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf.bfg_info.log_file_url}}">Test or Task Raw Log File</a><br/>
+  <a href="{{failed_bf.bfg_info.task_log_file_url}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf.bfg_info.system_log_url}}">Task System Raw Log File</a><br />
+  {% for fault_info in failed_bf.faults %}
+    <b>Category: {{fault_info.category}}</b><br />
+    <b>Source: </b>{{fault_info.source}}<br />
+    <b>Log Lines: </b> <a href="{{failed_bf.bfg_info.log_file_url|tohtml_logurl}}#L{{fault_info.line_number}}">Log File Fault</a>
     <div class='buildbaron-noformat'>
       <table>
-        {% for line in fault_info["context"].splitlines() %}
+        {% for line in fault_info.context.splitlines() %}
           <tr>
             <td class='buildbaron-code-line-td'>
               <pre class='code-line'><span>{{line}}</span></pre>
@@ -25,13 +25,13 @@
     </div>
     <br/>
   {% endfor %}
-  {% for test_info in failed_bf["test_faults"] %}
-    <b>Faults from test {{test_info["test"]}}</b><br />
-    {% for test_fault_info in test_info["faults"] %}
-        <b>Category: {{test_fault_info["category"]}}</b><br />
+  {% for test_info in failed_bf.test_faults %}
+    <b>Faults from test {{test_info.test}}</b><br />
+    {% for test_fault_info in test_info.faults %}
+        <b>Category: {{test_fault_info.category}}</b><br />
         <div class='buildbaron-noformat'>
           <table>
-            {% for line in test_fault_info["context"].splitlines() %}
+            {% for line in test_fault_info.context.splitlines() %}
               <tr>
                 <td class='buildbaron-code-line-td'>
                   <pre class='code-line'><span>{{line}}</span></pre>
@@ -41,6 +41,43 @@
           </table>
         </div>
       {% endfor %}
+  {% endfor %}
+  {% for backtrace in failed_bf.backtraces %}
+    <div class='buildbaron-visual-backtrace'>
+      <h5>Visual Backtrace</h5>
+      {% for frame in backtrace %}
+        <div class='buildbaron-stack-frame'>
+          <table>
+            <thead>
+              <tr>
+                <th class='buildbaron-code-header' colspan=2>Frame #{{frame.frame_number}} - <a href={{frame.github_url}}>{{frame.file_path}}:{{frame.line_number}}</a></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in frame.lines %}
+                <tr class='buildbaron-stack-frame-row'>
+                  {% if frame.first_line_number + loop.index == frame.line_number %}
+                    <td class='buildbaron-code-line-td buildbaron-code-line-num buildbaron-code-highlighted-line'>
+                      <pre class='code-line'><span>{{frame.first_line_number + loop.index}}</span></pre>
+                    </td>
+                    <td class='buildbaron-code-line-td buildbaron-code-highlighted-line'>
+                      <pre class='code-line'><code class="js">{{line}}</code></pre>
+                    </td>
+                  {% else %}
+                    <td class='buildbaron-code-line-td buildbaron-code-line-num'>
+                      <pre class='code-line'><span>{{frame.first_line_number + loop.index}}</span></pre>
+                    </td>
+                    <td class='buildbaron-code-line-td'>
+                      <pre class='code-line'><code class="js">{{line}}</code></pre>
+                    </td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endfor %}
+    </div>
   {% endfor %}
 </div>
 
@@ -90,7 +127,7 @@
           <div class="col-md-4">
             <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
               <div id="close_dup">
-                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf["bfg_info"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
+                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf.bfg_info.issue}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
               </div>
             </div>
           </div>
@@ -144,7 +181,7 @@
           <div class="col-md-4">
             <div class="buildbaron-issue-detail buildbaron-issue-detail-right">
               <div id="close_dup">
-                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf["bfg_info"]["issue"]}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
+                <a class="btn btn-default buildbaron-close-btn" href="close_duplicate?issue={{failed_bf.bfg_info.issue}}&duplicate_issue={{issue.key}}">Close As Duplicate</a>
               </div>
             </div>
           </div>
@@ -153,7 +190,7 @@
     {% endfor %}
   </div>
   <div id="close_gone">
-    If this is due to a transient machine issue: <a class="btn btn-danger" href="close_goneaway?issue={{failed_bf["bfg_info"]["issue"]}}">Close As Gone Away</a>
+    If this is due to a transient machine issue: <a class="btn btn-danger" href="close_goneaway?issue={{failed_bf.bfg_info.issue}}">Close As Gone Away</a>
   </div>
 
 </div>

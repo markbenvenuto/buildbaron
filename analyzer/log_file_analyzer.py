@@ -3,7 +3,6 @@
 A JS Test/Unit test log file analyzer
 """
 import argparse
-import json
 import os
 import re
 import sys
@@ -121,105 +120,106 @@ class LogFileAnalyzer:
     TODO(CWS)
     """
 
-    # TODO(CWS): document
     PROCESS_FAULTS = [
         {
             "fault_type": "C runtime error",
-            "regex_string": r"\*\*\* C runtime error.*$",
+            "regex": re.compile(r"\*\*\* C runtime error.*$"),
         },
         {
             "fault_type": "fatal assertion",
-            "begin_regex_string": r"Fatal assertion.*?$",
+            "begin_regex": re.compile(r"Fatal assertion.*?$"),
             "multi_line": True,
-            "end_regex_string": r"\*\*\*aborting after fassert failure",
+            "end_regex": re.compile(r"\*\*\*aborting after fassert failure"),
         },
         {
             "fault_type": "invariant failure",
-            "begin_regex_string": r"Invariant failure.*?$",
+            "begin_regex": re.compile(r"Invariant failure.*?$"),
             "multi_line": True,
-            "end_regex_string": r"\*\*\*aborting after invariant\(\) failure",
+            "end_regex": re.compile(r"\*\*\*aborting after invariant\(\) failure"),
         },
         {
             "fault_type": "Segmentation fault",
-            "begin_regex_string": r"Invariant failure.*?$",
+            "begin_regex": re.compile(r"Invariant failure.*?$"),
             "multi_line": True,
-            "end_regex_string": r"END BACKTRACE",
+            "end_regex": re.compile(r"END BACKTRACE"),
         },
         {
             "fault_type": "mongos startup failure",
-            "regex_string": r"Error: Failed to start mongos.*?failed.*?js",
+            "regex": re.compile(r"Error: Failed to start mongos.*?failed.*?js"),
         },
         {
             "fault_type": "memory leak(s)",
-            "begin_regex_string": r"LeakSanitizer: detected memory leaks.*?$",
+            "begin_regex": re.compile(r"LeakSanitizer: detected memory leaks.*?$"),
             "multi_line": True,
-            "end_regex_string": r"SUMMARY: AddressSanitizer.*?$",
+            "end_regex": re.compile(r"SUMMARY: AddressSanitizer.*?$"),
         },
         {
             "fault_type": "tcmalloc memory corruption",
-            "begin_regex_string": r"Found a corrupted memory buffer in MallocBlock.*?$",
+            "begin_regex": re.compile(r"Found a corrupted memory buffer in MallocBlock.*?$"),
             "multi_line": True,
-            "end_regex_string": r"END BACKTRACE",
+            "end_regex": re.compile(r"END BACKTRACE"),
         },
         {
             "fault_type": "teardown failure",
-            "regex_string": r"mongo.*?teardown.*?wasn't\.$",
+            "regex": re.compile(r"mongo.*?teardown.*?wasn't\.$"),
         },
     ]
 
-    # TODO(CWS): document
     TEST_FAULTS = [
         {
             "fault_type": "parallel test failure",
-            "regex_string": r"Parallel Test FAILED: .*$",
-        },
-        {
-            "fault_type": "js error",
-            "begin_regex_string": r"(Error: |assert.*failed)",
-            "multi_line": True,
-            "end_regex_string": r".*?\.js:[0-9]+(:[0-9]+)?$",
+            "regex": re.compile(r"Parallel Test FAILED: .*$"),
         },
         {
             "fault_type": "js backtrace",
-            "begin_regex_string": r"@[a-zA-Z0-9_/\\<> ]+(\.js|eval):[0-9]+(:[0-9]+)?$",
+            "begin_regex": re.compile(r"(Error: |assert.*failed)"),
             "multi_line": True,
-            "end_regex_string": r"[^0-9]$",
+            "middle_regex": re.compile(r"(failed to load:|@[a-zA-Z0-9_/\\<> ]+(\.js|eval):[0-9]+(:[0-9]+)?$)"),
+            "end_regex": re.compile(r"failed to load:"),
         },
         {
-            "fault_type": "failure to load",
-            "regex_string": r"failed to load:",
+            "fault_type": "js backtrace",  # this time with a multi-line error.
+            "begin_regex": re.compile("\[thread1\] (\w*Error: |assert.*failed)"),
+            "multi_line": True,
+            "end_regex": re.compile("failed to load"),
+        },
+        {
+            "fault_type": "concurrency failure",
+            "begin_regex": re.compile("Error: \d+ threads? threw"),
+            "multi_line": True,
+            "end_regex": re.compile("failed to load:"),
         },
         {
             "fault_type": "unittest failure",
-            "regex_string": r"FAIL: ",
+            "regex": re.compile(r"FAIL: "),
         },
         {
             "fault_type": "bad exit code",
-            "regex_string": r"StopError:.*?exited with error code -?(\d+)$",
+            "regex": re.compile(r"StopError:.*?exited with error code -?(\d+)$"),
         },
         {
             "fault_type": "fatal assertion",
-            "begin_regex_string": r"Fatal assertion.*?$",
+            "begin_regex": re.compile(r"Fatal assertion.*?$"),
             "multi_line": True,
-            "end_regex_string": r"\*\*\*aborting after fassert failure",
+            "end_regex": re.compile(r"\*\*\*aborting after fassert failure"),
         },
         {
             "fault_type": "invariant failure",
-            "begin_regex_string": r"Invariant failure.*?$",
+            "begin_regex": re.compile(r"Invariant failure.*?$"),
             "multi_line": True,
-            "end_regex_string": r"END BACKTRACE",
+            "end_regex": re.compile(r"END BACKTRACE"),
         },
         {
             "fault_type": "Segmentation fault",
-            "begin_regex_string": r"Invariant failure.*?$",
+            "begin_regex": re.compile(r"Invariant failure.*?$"),
             "multi_line": True,
-            "end_regex_string": r"END BACKTRACE",
+            "end_regex": re.compile(r"END BACKTRACE"),
         },
         {
             "fault_type": "dbhash mismatch",
-            "begin_regex_string": "checkReplicatedDataHashes.*different hash for the collection",
+            "begin_regex": re.compile("checkReplicatedDataHashes.*different hash for the collection"),
             "multi_line": True,
-            "end_regex_string": "Dumping collection",
+            "end_regex": re.compile("Dumping collection"),
         },
     ]
 
@@ -227,27 +227,38 @@ class LogFileAnalyzer:
         self.streams = streams
         self.joins = {}
         self.faults = []
-        self.contexts = []
 
     def add_fault(self, key, line_number, category, context):
         self.faults.append(faultinfo.FaultInfo(key, category, context, line_number))
 
-    def extract_multiline_regex(self, lines, start_line, end_regex):
+    def extract_multiline_regex(self, lines, start_line, end_regex, middle_regex):
         """
-        TODO(CWS)
+        Finds the lines matching a multi-line regex. Will return up to 50 lines after 'start_line',
+        adding any line that follows until a line matching 'end_regex' is found.
+
+        If 'middle_regex' is not None, each line in the middle must match this regex. This method
+        returns (None, None) if a subsequent line does not match 'middle_regex'.
+
+        Otherwise, returns the line number reached via this method, and the lines between
+        'start_line' and the ending line.
         """
-        line_number = start_line
-        while (line_number < len(lines) and
-               end_regex.search(lines[line_number].get_line()) is None):
+        MAX_LINES_PER_FAULT = 50
+        line_number = start_line + 1
+
+        while (line_number < len(lines)):
+            line = lines[line_number].get_line()
+            if middle_regex is not None and middle_regex.search(line) is None:
+                return None, None
+            if end_regex.search(line) is not None or line_number - start_line > MAX_LINES_PER_FAULT:
+                break
             line_number += 1
+
         if line_number == start_line:
             line_number = start_line + 1
+
         return line_number, lines[start_line:line_number]
 
     def extract_faults_from_stream(self, stream, fault_specs):
-        """
-        TODO(CWS)
-        """
         stream_line_num = 0
         while (stream_line_num < len(stream["lines"])):
             for fault in fault_specs:
@@ -255,7 +266,7 @@ class LogFileAnalyzer:
                 if fault.get("multi_line", False):
                     # This is a multi-line regex. We check this line for a match with the start
                     # regex, then keep looking until we find a match for the end regex.
-                    fault_start_regex = re.compile(fault["begin_regex_string"])
+                    fault_start_regex = fault["begin_regex"]
                     fault_match = fault_start_regex.search(line_info.get_line())
                     if fault_match is None:
                         continue
@@ -263,7 +274,11 @@ class LogFileAnalyzer:
                     new_line_number, fault_context = self.extract_multiline_regex(
                         stream["lines"],
                         stream_line_num,
-                        re.compile(fault["end_regex_string"]))
+                        fault["end_regex"],
+                        fault.get("middle_regex", None))
+
+                    if (new_line_number, fault_context) == (None, None):
+                        continue
 
                     self.add_fault(stream["id"],
                                    fault_context[0].get_line_number(),
@@ -274,7 +289,7 @@ class LogFileAnalyzer:
                         break
                 else:
                     # Easy case - a single line fault.
-                    fault_regex = re.compile(fault["regex_string"])
+                    fault_regex = re.compile(fault["regex"])
                     fault_match = fault_regex.search(line_info.get_line())
                     if fault_match is not None:
                         self.add_fault(stream["id"],
@@ -284,9 +299,6 @@ class LogFileAnalyzer:
             stream_line_num += 1
 
     def analyze(self):
-        """
-        TODO(CWS)
-        """
         for stream_id in self.streams:
             stream = self.streams[stream_id]
             if stream["stream_type"] == LogFileSplitter.PROCESS_STREAM:
@@ -296,13 +308,6 @@ class LogFileAnalyzer:
 
     def get_faults(self):
         return self.faults
-
-    def get_contexts(self):
-        return self.contexts
-
-    def to_json(self):
-        d1 = {"faults": self.faults, "contexts": self.contexts}
-        return json.dumps(d1, cls=faultinfo.CustomEncoder)
 
 
 def main():

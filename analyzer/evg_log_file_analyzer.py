@@ -14,7 +14,7 @@ if __name__ == "__main__" and __package__ is None:
 else:
     from . import faultinfo
 
-DEFAULT_CONTEXT_LINES = 20
+DEFAULT_CONTEXT_LINES = 10
 
 
 class EvgLogFileAnalyzer(object):

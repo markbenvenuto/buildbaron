@@ -146,16 +146,16 @@ class jira_client(object):
           "github_url": "https://github.com/mongodb/mongo/blob/deadbeef/jstests/core/test.js#L42",
           "first_line_number": 37,
           "line_number": 42,
-          "file": "jstests/core/test.js",
+          "frame_number": 0,
+          "file_path": "jstests/core/test.js",
           "file_name": "test.js",
           "lines": ["line 37", "line 38", ..., "line 47"]
         }
         """
         new_description_lines = [""]
-        for i in range(len(backtrace)):
-            frame = backtrace[i]
+        for frame in backtrace:
             frame_title = "Frame {frame_number}: [{path}:{line_number}|{url}]".format(
-                frame_number=len(backtrace) - (i + 1),
+                frame_number=frame["frame_number"],
                 path=frame["file_path"],
                 line_number=frame["line_number"],
                 url=frame["github_url"]
