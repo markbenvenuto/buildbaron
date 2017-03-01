@@ -274,15 +274,22 @@ class bfg_analyzer(object):
             extracted_faults.extend(task_faults)
             tests_fault_info.extend(test_faults)
 
-        summary_obj = {
-            "bfg_info": bf,
-            "faults": [fault.to_json() for fault in extracted_faults],
-            "test_faults": [
-                {"test": info["test"], "faults": [fault.to_json() for fault in info["faults"]]}
-                for info in tests_fault_info
-            ],
-            "backtraces": [],
-        }
+        try:
+            summary_obj = {
+                "bfg_info": bf,
+                "faults": [fault.to_json() for fault in extracted_faults],
+                "test_faults": [
+                    {"test": info["test"], "faults": [fault.to_json() for fault in info["faults"]]}
+                    for info in tests_fault_info
+                ],
+                "backtraces": [],
+            }
+        except TypeError:
+            summary_obj = {
+                "bfg_info": bf,
+                "faults": [fault.to_json() for fault in extracted_faults],
+                "backtraces": [],
+            }
         summary_str = json.dumps(summary_obj)
 
         def flatten(a):
@@ -295,8 +302,11 @@ class bfg_analyzer(object):
             return flattened
 
         # Update jira tickets to include new information.
-        all_faults = (extracted_faults
-                      + flatten([testinfo["faults"] for testinfo in tests_fault_info]))
+        try:
+            all_faults = (extracted_faults
+                          + flatten([testinfo["faults"] for testinfo in tests_fault_info]))
+        except:
+            all_faults = extracted_faults
 
         for fault in all_faults:
             self.jira_client.add_fault_comment(bf["issue"], fault)
