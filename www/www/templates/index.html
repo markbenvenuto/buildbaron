@@ -5,31 +5,45 @@
 <div class="jumbotron">
     <h2>Build Baron Analyzer</h2>
     <p class="lead">Click on "Expand Details" button for more information about each failure. Click on "Failure Details View" to find duplicate bugs for the test failure, and close as duplicate or gone away.</p>
-    <p><a href="https://evergreen.mongodb.com" class="btn btn-primary btn-medium">Evergreen</a>
+    <p>
+        <!-- Useful links and the like -->
+        <a href="https://evergreen.mongodb.com" class="btn btn-primary btn-medium">Evergreen</a>
         <a href="https://jira.mongodb.org/secure/RapidBoard.jspa?rapidView=517" class="btn btn-primary btn-medium">Build Baron Queue</a>
+        <a href="https://goo.gl/K9zt0b" class="btn btn-primary btn-medium">Build Baron Workflow</a>
+        <a href="https://goo.gl/27rslS" class="btn btn-primary btn-medium">Investigating a Build Failure</a>
+        <a href="https://goo.gl/jj4hnx" class="btn btn-primary btn-medium">Fantastic Bugs and Where to Find Them</a>
     </p>
 </div>
 
-<h3>Build Failure Count: {{bf_count}}</h3>
-<h4>Date: {{date}}&nbsp;&nbsp;&nbsp;&nbsp;Query: {{query}}</h4>
+<div>
+    <h3>Statistics</h3>
+    <h4>Build Failure Count: {{bf_count}}</h4>
+    <h4>Date: {{date}}</h4>
+    <h4>Query: <text class="code-line">{{query}}</text></h4>
+</div>
+
+<form method="POST" action="/bulk_close_duplicate">
 <div class="row">
     <div class=".col-lg-12">
         <table class="table" data-toggle="table">
             <thead>
                 <tr>
+                    <th data-sortable="false">Select</th>
                     <th data-field="issue" data-sortable="true">Issue</th>
                     <th data-field="id" data-sortable="true">Task/Test Id</th>
                     <th data-field="summary" data-sortable="true">Summary</th>
                 </tr>
             </thead>
             <tbody>
+                <fieldset>
                 {% for failed_bf in failed_bfs %}
                 <tr>
+                    <td><input type="checkbox" name="issues" value="{{failed_bf["bfg_info"]["issue"]}}"/></td>
                     <td><a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br />{{failed_bf["bfg_info"]["type"]}}</td>
                     <td>
                         <div class="container">
                             <button type="button" class="btn btn-info" data-toggle="collapse" data-target="#{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}">Expand Details</button>
-                            <a href="failure?issue={{failed_bf["bfg_info"]["issue"]}}&test_name={{failed_bf["bfg_info"]["name"]}}">Failure Details View</a>
+                            <a href="failure?issue={{failed_bf["bfg_info"]["issue"]}}&test_name={{failed_bf["bfg_info"]["name"]}}"><button type="button" class="btn btn-info">Failure Details View</button></a>
                             <div id="{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}" class="collapse">
                                 <a href="{{failed_bf["bfg_info"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["log_file_url"]}}">Test or Task Raw Log File</a><br />
                                 <a href="{{failed_bf["bfg_info"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["system_log_url"]}}">Task System Raw Log File</a><br />
@@ -74,6 +88,7 @@
                     <td>{{failed_bf["bfg_info"]["summary"]}}</td>
                 </tr>
                 {% endfor %}
+                </fieldset>
             </tbody>
         </table>
     </div>
@@ -91,5 +106,18 @@
     </div>
         -->
 </div>
+<div>
+    <h3>Bulk Close Tool</h3>
+    <p>
+        You can close multiple tickets as a duplicate of a single ticket.
+        Please use this tool carefully, and only bulk close tickets for which
+        you're certain of the root cause. Check the box next to the tickets to
+        close and enter the issue key of the duplicated ticket in the
+        textbox.
+    </p>
+    <p>Duplicated issue key: <input type="text" name="duplicated_ticket" /></p>
+    <p><input type="submit" class="btn btn-danger" value="Bulk Close!" /></p>
+</div>
+</form>
 
 {% endblock %}

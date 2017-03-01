@@ -1,8 +1,12 @@
 Flask<1
 appdirs
+click
 gitpython
+itsdangerous
+jinja2
 jira
 keyring
 packaging
 python-dateutil
 pyyaml
+werkzeug

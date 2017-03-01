@@ -202,6 +202,46 @@ def close_goneaway():
         'gone_away.html', title='Ticket Resolved', year=datetime.now().year, issue=issue)
 
 
+@app.route('/bulk_close_duplicate', methods=['POST'])
+def bulk_close_duplicate():
+    """Renders the bulk duplicate page."""
+
+    user_errors = []
+    ticket_successes = []
+    ticket_failures = []
+    issues = request.form.getlist('issues')
+    duplicated_ticket = request.form.get('duplicated_ticket')
+
+    if not issues:
+        user_errors.append("You didn't select any issues to close.")
+    elif not duplicated_ticket:
+        user_errors.append("You must specify which ticket is the duplicated issue.")
+    else:
+        jc = get_jira_client()
+        for issue in issues:
+            try:
+                jc.close_as_duplicate(issue, duplicated_ticket)
+                ticket_successes.append(issue)
+            except analyzer.jira_client.JIRAError as err:
+                print(err)
+                error_info = {
+                    "ticket": issue,
+                    "reason": err.text,
+                    "url": err.url
+                }
+                ticket_failures.append(error_info)
+
+    return render_template(
+            'bulk_duplicate.html',
+            title='Tickets Closed',
+            jira_server=analyzer.analyzer_config.jira_server(),
+            year=datetime.now().year,
+            duplicate_issue=duplicated_ticket,
+            ticket_successes=ticket_successes,
+            ticket_failures=ticket_failures,
+            user_errors=user_errors)
+
+
 @app.route('/about')
 def about():
     """Renders the about page."""

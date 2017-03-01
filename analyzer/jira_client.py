@@ -208,7 +208,7 @@ class jira_client(object):
                     description=jira_issue.fields.description + "\n".join(new_lines))
             else:
                 print("Skipping issue update, since issue is already tagged with 'bot-analyzed'")
-        except jira_client.JIRAError as e:
+        except JIRAError as e:
             print("Error updating JIRA: " + str(e))
 
 
@@ -265,20 +265,19 @@ class jira_client(object):
                                              "\) @ [0-9A-Za-z]+\]")
 
             parsed_title = title_parsing_regex.match(src_issue.fields.summary)
-            assert(parsed_title is not None)
+            if parsed_title is not None:
+                # Update the failing variants.
+                variant = parsed_title.group("variant_prefix").rstrip()
+                if parsed_title.group("variant_suffix") is not None:
+                    variant += parsed_title.group("variant_suffix").rstrip()
 
-            # Update the failing variants.
-            variant = parsed_title.group("variant_prefix").rstrip()
-            if parsed_title.group("variant_suffix") is not None:
-                variant += parsed_title.group("variant_suffix").rstrip()
+                self.add_affected_variant(dest_issue, variant)
 
-            self.add_affected_variant(dest_issue, variant)
+                # Update the failing tasks.
+                self.add_failing_task(dest_issue, parsed_title.group("suite_name"))
 
-            # Update the failing tasks.
-            self.add_failing_task(dest_issue, parsed_title.group("suite_name"))
-
-            # Update the affected versions.
-            self.add_affected_version(dest_issue, parsed_title.group("version"))
+                # Update the affected versions.
+                self.add_affected_version(dest_issue, parsed_title.group("version"))
 
             # Close - id 2
             # Duplicate issue is 3

@@ -1,0 +1,45 @@
+﻿{% extends "layout.html" %}
+
+{% block content %}
+{% if user_errors %}
+    <h2>Uh oh! Errors occurred:<h2>
+    <ul>
+        {% for error in user_errors %}
+            <h3>
+                <li>{{error}}</li>
+            </h3>
+        {% endfor %}
+    </ul>
+{% else %}
+    <h2>{{ title }}: <a href="{{jira_server}}/browse/{{issue}}">{{issue}}</a><br /></h2>
+    <div>
+        <h3>The following issues were closed as duplicate of <a href="{{jira_server}}/browse/{{duplicate_issue}}">{{duplicate_issue}}</a>:</h3>
+        <ul>
+            {% for issue in ticket_successes %}
+                <h4>
+                    <li>
+                        <a href="{{jira_server}}/browse/{{issue}}">{{issue}}</a>
+                    </li>
+                </h4>
+            {% else %}
+                <h4><li>None! Uh oh...</li></h4>
+            {% endfor %}
+        </ul>
+    </div>
+
+    {% if ticket_failures %}
+        <div>
+            <h3>Errors occurred for the following issues:</h3>
+            <ul>
+                {% for failure in ticket_failures %}
+                    <h4>
+                        <li>
+                            Closing <a href="{{jira_server}}/browse/{{failure['ticket']}}">{{failure['ticket']}}</a> failed: {{failure['reason']}} {{failure['url']}}
+                        </li>
+                    </h4>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+{% endif %}
+{% endblock %}
