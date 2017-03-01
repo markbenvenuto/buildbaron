@@ -20,47 +20,58 @@
                     <th data-field="issue" data-sortable="true">Issue</th>
                     <th data-field="id" data-sortable="true">Task/Test Id</th>
                     <th data-field="summary" data-sortable="true">Summary</th>
-                    <th data-field="name" data-sortable="true">Test Name</th>
                 </tr>
             </thead>
             <tbody>
                 {% for failed_bf in failed_bfs %}
                 <tr>
-                    <td><a href="https://jira.mongodb.org/browse/{{failed_bf["test"]["issue"]}}">{{failed_bf["test"]["issue"]}}</a><br />{{failed_bf["test"]["type"]}}</td>
-                    <td>{{failed_bf["test"]["name"]}}
+                    <td><a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br />{{failed_bf["bfg_info"]["type"]}}</td>
+                    <td>
                         <div class="container">
-                            <button type="button" class="btn btn-info" data-toggle="collapse" data-target="#{{(failed_bf["test"]["summary"] + failed_bf["test"]["name"])|hash_name}}">Expand Details</button>
-                            <a href="failure?issue={{failed_bf["test"]["issue"]}}&test_name={{failed_bf["test"]["name"]}}">Failure Details View</a>
-                            <div id="{{(failed_bf["test"]["summary"] + failed_bf["test"]["name"])|hash_name}}" class="collapse">
-                                <a href="{{failed_bf["test"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["test"]["log_file_url"]}}">Test or Task Raw Log File</a><br />
-                                <a href="{{failed_bf["test"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["test"]["system_log_url"]}}">Task System Raw Log File</a><br />
-                                {% if failed_bf["summary"]["faults"] %}
-                                    {% for fault_info in failed_bf["summary"]["faults"] %}
-                                        <b>Faults</b><br/>
-                                        <b>Category: {{fault_info["category"] }}</b><br />
-                                        <b>Source: </b>{{fault_info["source"]}}<br />
-                                        <b>Log Lines: </b> <a href="{{failed_bf["test"]["log_file_url"]|tohtml_logurl}}#L{{fault_info["line_number"]}}">Log File Fault</a><pre>{{fault_info["context"]}}</pre><br />
-                                        <br/>
+                            <button type="button" class="btn btn-info" data-toggle="collapse" data-target="#{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}">Expand Details</button>
+                            <a href="failure?issue={{failed_bf["bfg_info"]["issue"]}}&test_name={{failed_bf["bfg_info"]["name"]}}">Failure Details View</a>
+                            <div id="{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}" class="collapse">
+                                <a href="{{failed_bf["bfg_info"]["task_url"]}}">Task Page</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["log_file_url"]}}">Test or Task Raw Log File</a><br />
+                                <a href="{{failed_bf["bfg_info"]["task_log_file_url"]}}">Task Raw Log File</a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="{{failed_bf["bfg_info"]["system_log_url"]}}">Task System Raw Log File</a><br />
+                                <b>Extracted Faults:</b><br/>
+                                {% for fault_info in failed_bf["faults"] %}
+                                  <b>Category: {{fault_info["category"]}}</b><br />
+                                  <b>Source: </b>{{fault_info["source"]}}<br />
+                                  <b>Log Lines: </b> <a href="{{failed_bf["bfg_info"]["log_file_url"]|tohtml_logurl}}#L{{fault_info["line_number"]}}">Log File Fault</a>
+                                  <div class='buildbaron-noformat'>
+                                    <table>
+                                      {% for line in fault_info["context"].splitlines() %}
+                                        <tr>
+                                          <td class='buildbaron-code-line-td'>
+                                            <pre class='code-line'><span>{{line}}</span></pre>
+                                          </td>
+                                        </tr>
+                                      {% endfor %}
+                                    </table>
+                                  </div>
+                                  <br/>
+                                {% endfor %}
+                                {% for test_info in failed_bf["test_faults"] %}
+                                  <b>Faults from test {{test_info["test"]}}</b><br />
+                                  {% for test_fault_info in test_info["faults"] %}
+                                      <b>Category: {{test_fault_info["category"]}}</b><br />
+                                      <div class='buildbaron-noformat'>
+                                        <table>
+                                          {% for line in test_fault_info["context"].splitlines() %}
+                                            <tr>
+                                              <td class='buildbaron-code-line-td'>
+                                                <pre class='code-line'><span>{{line}}</span></pre>
+                                              </td>
+                                            </tr>
+                                          {% endfor %}
+                                        </table>
+                                      </div>
                                     {% endfor %}
-                                {% else  %}
-                                <b>TODO: add support for analyzing this failure</b><pre>python3 analyzer/log_file_analyzer.py {{failed_bf["test"]["cache"]}}/test.log</pre><br/>
-                                {% endif %}
-                                {% if failed_bf["summary"]["contexts"] %}
-                                    <b>Additional Context</b><br />
-                                    {% for context_info in failed_bf["summary"]["contexts"] %}
-                                        <b>Category: {{context_info["category"] }}</b><br />
-                                        <b>Source: </b>{{context_info["source"]}}<br />
-                                        <b>Log Lines: </b><pre>{{context_info["context"]}}</pre><br />
-                                    {% endfor %}
-                                <b>Contexts???</b>
-                                {% else  %}
-                                <b>TODO: add support for adding context to this failure</b><pre>python3 analyzer/log_file_analyzer.py {{failed_bf["test"]["cache"]}}/test.log</pre><br />
-                                {% endif %}
+                                {% endfor %}
                             </div>
                         </div>
                     </td>
-                    <td>{{failed_bf["test"]["summary"]}}</td>
-                    <td>{{failed_bf["test"]["name"]}}</td>
+                    <td>{{failed_bf["bfg_info"]["summary"]}}</td>
                 </tr>
                 {% endfor %}
             </tbody>
