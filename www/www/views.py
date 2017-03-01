@@ -116,8 +116,9 @@ def failure():
                                          issue,
                                          [bf["bfg_info"]["issue"] for bf in failed_bfs]))
 
-    # Predicates
+    # Query Predicates
     def remove_special_characters(string):
+        """Filter special characters out of search terms for Jira."""
         new_string = ""
         for c in string:
             if c not in ["]", "}", "[", "{", "(", ")", "\\", '"', "'"]:
@@ -132,6 +133,7 @@ def failure():
             else:
                 flattened.append(elem)
         return flattened
+
     jira_text_terms = [os.path.basename(test_name), failed_bf['bfg_info']['suite']]
     all_faults = (
         failed_bf["faults"] +

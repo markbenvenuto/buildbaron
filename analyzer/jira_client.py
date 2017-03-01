@@ -47,7 +47,7 @@ class jira_client(object):
             password = getpass.getpass("Jira Password:")
 
             if keyring:
-                answer = raw_input("Store password in system keyring? (y/N): ").strip()
+                answer = input("Store password in system keyring? (y/N): ").strip()
 
                 if answer == "y":
                     keyring.set_password(server, user, password)
@@ -83,6 +83,7 @@ class jira_client(object):
             affected_versions = []
         else:
             affected_versions = [{"name": v.name} for v in affected_versions]
+
         if affected_version_string.lower() == "master":
             affected_version_string = "3.6"
 
@@ -106,6 +107,7 @@ class jira_client(object):
 
         if failing_task_string in failing_tasks:
             return
+
         failing_tasks.append(failing_task_string)
 
         try:
