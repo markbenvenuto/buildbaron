@@ -20,14 +20,13 @@
                     <th data-field="issue" data-sortable="true">Issue</th>
                     <th data-field="id" data-sortable="true">Task/Test Id</th>
                     <th data-field="summary" data-sortable="true">Summary</th>
-                    <th data-field="name" data-sortable="true">Test Name</th>
                 </tr>
             </thead>
             <tbody>
                 {% for failed_bf in failed_bfs %}
                 <tr>
                     <td><a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br />{{failed_bf["bfg_info"]["type"]}}</td>
-                    <td>{{failed_bf["bfg_info"]["name"]}}
+                    <td>
                         <div class="container">
                             <button type="button" class="btn btn-info" data-toggle="collapse" data-target="#{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}">Expand Details</button>
                             <a href="failure?issue={{failed_bf["bfg_info"]["issue"]}}&test_name={{failed_bf["bfg_info"]["name"]}}">Failure Details View</a>
@@ -73,7 +72,6 @@
                         </div>
                     </td>
                     <td>{{failed_bf["bfg_info"]["summary"]}}</td>
-                    <td>{{failed_bf["bfg_info"]["name"]}}</td>
                 </tr>
                 {% endfor %}
             </tbody>
