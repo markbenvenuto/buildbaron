@@ -22,6 +22,8 @@ Analysis is a two step process. An offline analysis, and a separate viewer scrip
 
 1. Do the analysis
 
+Running the analyzer requires that you have a mongod running on localhost on port 27017.
+
 ```
 python3 bfg_analyzer.py
 ```
@@ -40,6 +42,8 @@ It caches all files and already completed analysis in `cache\bf`.
  See [Implementation](#implementation) below.
 
 2. View the analysis
+
+Running the server requires that you have a mongod running on localhost on port 27017.
 
 ```
 python3 www\runserver.py

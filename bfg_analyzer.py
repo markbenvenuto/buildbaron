@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import pprint
+import pymongo
+from pymongo import MongoClient
 import re
 import requests
 import stat
@@ -661,12 +663,22 @@ def main():
 
     print("Query: %s" % query_str)
 
+    # Connect to mongod
+    client = MongoClient('localhost', 27017)
+    db = client['buildbaron']
+    coll = db['open_bfgs']
+    coll.remove()
+
+    # Connect to jira
     jira_client = buildbaron.analyzer.jira_client.jira_client(args.jira_server, args.jira_user)
 
+    # Create our analyzer
     bfa = bfg_analyzer(jira_client)
 
+    # Fetch desired BFG tickets
     bfs = bfa.query(query_str)
 
+    # Analyze for failure
     failed_bfs = bfa.check_logs(bfs)
 
     print("Total BFs to investigate %d\n" % len(failed_bfs))
@@ -679,6 +691,10 @@ def main():
 
     with open("failed_bfs.json", "w", encoding="utf8") as sjh:
         json.dump(failed_bfs_root, sjh, indent="\t")
+
+    for bf in failed_bfs:
+        coll.insert_one(bf)
+        print("Inserted " + bf['bfg_info']['issue'])
 
 
 if __name__ == '__main__':

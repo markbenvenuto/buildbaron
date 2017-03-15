@@ -22,6 +22,43 @@
     <h4>Query: <text class="code-line">{{query}}</text></h4>
 </div>
 
+<!-- Text search /-->
+<div id="bfg-text-search-error"></div>
+Search summaries: <input type="text" class="full-width-text-input" id="bfg-text-search" size="400"/>
+&nbsp;&nbsp;<button type="button" class="btn btn-danger" id="bfg-text-search-btn">Search</button>
+
+<br/><br/>
+
+<script>
+  $( "#bfg-text-search-btn" ).click(function() {
+      var text = $( "#bfg-text-search" ).val();
+      if (!text) {
+          $( "#bfg-text-search-error" ).html("Please enter valid text.");
+      return;
+  }
+
+  var data = {
+      "text" : text,
+  };
+
+  $.ajax({
+      url: "/bfg_text_search",
+      data: JSON.stringify(data, null, '\t'),
+      contentType: 'application/json;charset=UTF-8',
+      type: 'POST',
+      success: function(response) {
+          $("html").empty();
+          $("html").append(response);
+      },
+      error: function(error) {
+          console.log(error);
+      }
+  });
+
+  });
+</script>
+
+
 <form method="POST" action="/bulk_close_duplicate">
 <div class="row">
     <div class=".col-lg-12">
@@ -38,9 +75,62 @@
                 <fieldset>
                 {% for failed_bf in failed_bfs %}
                 <tr>
-                    <td><input type="checkbox" name="issues" value="{{failed_bf["bfg_info"]["issue"]}}"/></td>
-                    <td><a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">{{failed_bf["bfg_info"]["issue"]}}</a><br />{{failed_bf["bfg_info"]["type"]}}</td>
                     <td>
+                      <!-- Bulk close checkbox /-->
+                      <input type="checkbox" name="issues" class="bf-bulk-checkbox" value="{{failed_bf["bfg_info"]["issue"]}}"/>
+                    </td>
+
+                    <td>
+                      <!-- Issue name, and close-as-dup for this ticket only /-->
+                      <a href="https://jira.mongodb.org/browse/{{failed_bf["bfg_info"]["issue"]}}">
+                        {{failed_bf["bfg_info"]["issue"]}}
+                      </a>
+                      <br />
+                      {{failed_bf["bfg_info"]["type"]}}
+                      <br/><br/>
+
+                      <div id="dup-{{failed_bf['bfg_info']['issue']}}">
+                      <p>Duplicates: <input type="text" id="close-dup-{{failed_bf['bfg_info']['issue']}}" /></p>
+                      <p><button type="button" class="btn btn-danger" id="close-dup-btn-{{failed_bf['bfg_info']['issue']}}">Close</button></p>
+                      </div>
+
+                      <script>
+                        $( "#close-dup-btn-{{failed_bf['bfg_info']['issue']}}" ).click(function() {
+                            var issue = "{{failed_bf['bfg_info']['issue']}}";
+                            var duplicate = $( "#close-dup-{{failed_bf['bfg_info']['issue']}}" ).val();
+
+                            var s = "Closing " + issue + " as duplicate of " + duplicate;
+
+                            var data = {
+                                "issue" : issue,
+                                "duplicate" : duplicate,
+                            };
+
+                            $.ajax({
+                                url: "/close_duplicate_home_page",
+                                data: JSON.stringify(data, null, '\t'),
+                                contentType: 'application/json;charset=UTF-8',
+                                type: 'POST',
+                                success: function(response) {
+
+                                    // if we succeeded, remove button
+                                    if (response == "ok") {
+                                        $( "#dup-{{failed_bf['bfg_info']['issue']}}" ).html("Closed.");
+                                    } else {
+                                        $( "#dup-{{failed_bf['bfg_info']['issue']}}" ).prepend(response);
+                                    }
+                                },
+                                error: function(error) {
+                                console.log(error);
+                                    $( "#dup-{{failed_bf['bfg_info']['issue']}}" ).html(error);
+                                }
+                            });
+                        });
+                      </script>
+
+                    </td>
+
+                    <td>{{failed_bf["bfg_info"]["name"]}}
                         <div class="container">
                             <button type="button" class="btn btn-info" data-toggle="collapse" data-target="#{{(failed_bf["bfg_info"]["summary"] + failed_bf["bfg_info"]["name"])|hash_name}}">Expand Details</button>
                             <a href="failure?issue={{failed_bf["bfg_info"]["issue"]}}&test_name={{failed_bf["bfg_info"]["name"]}}"><button type="button" class="btn btn-info">Failure Details View</button></a>
@@ -115,6 +205,21 @@
         close and enter the issue key of the duplicated ticket in the
         textbox.
     </p>
+    Select all: <input type="checkbox" id="bulk-close-select-all" />
+    <p id="bulk-close-select-all-warning" style="color:red;"></p>
+
+    <script>
+      $("#bulk-close-select-all").click(function() {
+          if ($(this).prop("checked")) {
+              $("#bulk-close-select-all-warning").html("WARNING: about to close all tickets, are you sure?!");
+              $(".bf-bulk-checkbox").prop("checked", true);
+          } else {
+              $("#bulk-close-select-all-warning").html("");
+              $(".bf-bulk-checkbox").prop("checked", false);
+          }
+      });
+    </script>
+
     <p>Duplicated issue key: <input type="text" name="duplicated_ticket" /></p>
     <p><input type="submit" class="btn btn-danger" value="Bulk Close!" /></p>
 </div>

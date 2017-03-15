@@ -7,6 +7,7 @@ jinja2
 jira
 keyring
 packaging
+pymongo
 python-dateutil
 pyyaml
 werkzeug

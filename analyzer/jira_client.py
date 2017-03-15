@@ -2,6 +2,8 @@
 Jira Client and utility operations
 """
 import getpass
+import pymongo
+from pymongo import MongoClient
 import re
 import threading
 
@@ -282,6 +284,13 @@ class jira_client(object):
             # Close - id 2
             # Duplicate issue is 3
             self.jira.transition_issue(src_issue, '2', resolution={'id': '3'})
+
+            # Remove from our collection
+            # TODO: don't connect every time, this is dumb.
+            client = MongoClient('localhost', 27017)
+            coll = client['buildbaron']['open_bfgs']
+            coll.remove({ 'bfg_info.issue' : issue })
+
 
     def close_as_goneaway(self, issue):
         with self._lock:

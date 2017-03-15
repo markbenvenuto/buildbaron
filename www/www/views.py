@@ -8,6 +8,8 @@ from flask import request
 from flask import render_template, g
 from www import app
 import os
+import pymongo
+from pymongo import MongoClient
 import sys
 import threading
 
@@ -36,14 +38,19 @@ def home():
     date = failed_bfs_root['date']
     failed_bfs = failed_bfs_root['bfs']
 
+    # TODO this is a mess.  Load from collection.
+    client = MongoClient('localhost', 27017)
+    coll = client['buildbaron']['open_bfgs']
+    bfs = list(coll.find())
+
     return render_template(
         'index.html',
         title='Home Page',
         year=datetime.now().year,
-        failed_bfs=failed_bfs,
+        failed_bfs=bfs,
         query=query,
         date=date,
-        bf_count=len(failed_bfs))
+        bf_count=len(bfs))
 
 
 statusKeys = {
@@ -168,6 +175,57 @@ def failure():
         recent_issues=recent_issues,
         recent_issues_query=recent_issues_query,
         is_system_failure=is_system_failure)
+
+
+@app.route('/bfg_text_search', methods=['POST'])
+def bfg_text_search():
+    """Filter issues by the given text."""
+    text = request.json["text"]
+
+    # Get the matching tickets from the database
+    client = MongoClient('localhost', 27017)
+    coll = client['buildbaron']['open_bfgs']
+
+    res = coll.find({ '$text': { '$search': text }})
+
+    query = "{ '$text' : { '$search' :' " + text + "' }}"
+    date = "??"
+
+    # todo: make this work better with cursors...
+    filtered_bfs = list(res)
+
+    # Re-load the home page with the filtered tickets
+    return render_template(
+        'index.html',
+        title='Home Page',
+        year=datetime.now().year,
+        failed_bfs=filtered_bfs,
+        query=query,
+        date=date,
+        bf_count=len(filtered_bfs))
+
+
+@app.route('/close_duplicate_home_page', methods=['POST'])
+def close_duplicate_home_page():
+    """Closes a duplicate ticket from the home page."""
+
+    issue = request.json["issue"]
+    duplicate = request.json["duplicate"]
+
+    print("got request to close " + issue + " as a dup of " + duplicate)
+    try:
+        jc = get_jira_client()
+        jc.close_as_duplicate(issue, duplicate)
+
+        return "ok"
+
+    except analyzer.jira_client.JIRAError as err:
+        print(err)
+        message = "Couldn't close ticket: " + err.text
+
+        return message
+
+    return "ok"
 
 
 @app.route('/close_duplicate')
