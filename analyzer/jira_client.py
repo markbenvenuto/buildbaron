@@ -2,8 +2,6 @@
 Jira Client and utility operations
 """
 import getpass
-import pymongo
-from pymongo import MongoClient
 import re
 import threading
 
@@ -14,6 +12,7 @@ try:
 except ImportError:
     keyring = None
 
+from . import mongo_client
 
 class jira_client(object):
     """Simple wrapper around jira api for build baron analyzer needs"""
@@ -285,12 +284,7 @@ class jira_client(object):
             # Duplicate issue is 3
             self.jira.transition_issue(src_issue, '2', resolution={'id': '3'})
 
-            # Remove from our collection
-            # TODO: don't connect every time, this is dumb.
-            client = MongoClient('localhost', 27017)
-            coll = client['buildbaron']['open_bfgs']
-            coll.remove({ 'bfg_info.issue' : issue })
-
+            mongo_client.remove_issue(issue)
 
     def close_as_goneaway(self, issue):
         with self._lock:
@@ -300,6 +294,8 @@ class jira_client(object):
             # Gone away is 7
             self.jira.transition_issue(
                 src_issue, '2', comment="Transient machine issue.", resolution={'id': '7'})
+
+            mongo_client.remove_issue(issue)
 
     def get_bfg_issue(self, issue_number):
         if not issue_number.startswith("BFG-") and not issue_number.startswith("BF-"):

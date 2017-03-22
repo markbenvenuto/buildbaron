@@ -21,8 +21,9 @@ lib_path = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(os.path.realpath(__file__)))))
 print(lib_path)
 
-import analyzer.jira_client
 import analyzer.analyzer_config
+import analyzer.jira_client
+import analyzer.mongo_client
 
 
 @app.route('/')
@@ -38,10 +39,7 @@ def home():
     date = failed_bfs_root['date']
     failed_bfs = failed_bfs_root['bfs']
 
-    # TODO this is a mess.  Load from collection.
-    client = MongoClient('localhost', 27017)
-    coll = client['buildbaron']['open_bfgs']
-    bfs = list(coll.find())
+    bfs = analyzer.mongo_client.get_bfs()
 
     return render_template(
         'index.html',
@@ -142,10 +140,13 @@ def failure():
         return flattened
 
     jira_text_terms = [os.path.basename(test_name), failed_bf['bfg_info']['suite']]
-    all_faults = (
-        failed_bf["faults"] +
-        flatten([testinfo["faults"] for testinfo in failed_bf["test_faults"]])
-    )
+    if "test_faults" in failed_bf:
+        all_faults = (
+            failed_bf["faults"] +
+            flatten([testinfo["faults"] for testinfo in failed_bf["test_faults"]])
+        )
+    else:
+        all_faults = (failed_bf["faults"])
 
     jira_text_terms.extend(
         [remove_special_characters(fault["context"].splitlines()[0]) for fault in all_faults])
@@ -183,16 +184,7 @@ def bfg_text_search():
     text = request.json["text"]
 
     # Get the matching tickets from the database
-    client = MongoClient('localhost', 27017)
-    coll = client['buildbaron']['open_bfgs']
-
-    res = coll.find({ '$text': { '$search': text }})
-
-    query = "{ '$text' : { '$search' :' " + text + "' }}"
-    date = "??"
-
-    # todo: make this work better with cursors...
-    filtered_bfs = list(res)
+    filtered_bfs = analyzer.mongo_client.get_bfs_via_text(text)
 
     # Re-load the home page with the filtered tickets
     return render_template(

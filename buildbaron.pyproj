@@ -27,6 +27,9 @@
     <Compile Include="analyzer\analyzer_config.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="analyzer\mongo_client.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="analyzer\parallel_failure_analyzer.py" />
     <Compile Include="analyzer\timeout_file_analyzer.py">
       <SubType>Code</SubType>

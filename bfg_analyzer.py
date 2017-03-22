@@ -11,8 +11,6 @@ import hashlib
 import json
 import os
 import pprint
-import pymongo
-from pymongo import MongoClient
 import re
 import requests
 import stat
@@ -20,7 +18,6 @@ import sys
 
 if __name__ == "__main__" and __package__ is None:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(os.path.realpath(__file__)))))
-    print(sys.path)
 
 import buildbaron.analyzer.analyzer_config
 import buildbaron.analyzer.evergreen
@@ -29,9 +26,9 @@ import buildbaron.analyzer.faultinfo
 import buildbaron.analyzer.jira_client
 import buildbaron.analyzer.log_file_analyzer
 import buildbaron.analyzer.logkeeper
+import buildbaron.analyzer.mongo_client
 import buildbaron.analyzer.parallel_failure_analyzer
 import buildbaron.analyzer.timeout_file_analyzer
-
 
 # URL of the default Jira server.
 # If you use .com, it breaks horribly
@@ -664,10 +661,8 @@ def main():
     print("Query: %s" % query_str)
 
     # Connect to mongod
-    client = MongoClient('localhost', 27017)
-    db = client['buildbaron']
-    coll = db['open_bfgs']
-    coll.remove()
+    print("Initializing local MongoDB server...")
+    buildbaron.analyzer.mongo_client.reinit_db()
 
     # Connect to jira
     jira_client = buildbaron.analyzer.jira_client.jira_client(args.jira_server, args.jira_user)
@@ -692,9 +687,7 @@ def main():
     with open("failed_bfs.json", "w", encoding="utf8") as sjh:
         json.dump(failed_bfs_root, sjh, indent="\t")
 
-    for bf in failed_bfs:
-        coll.insert_one(bf)
-        print("Inserted " + bf['bfg_info']['issue'])
+    buildbaron.analyzer.mongo_client.load_bfs(failed_bfs)
 
 
 if __name__ == '__main__':
